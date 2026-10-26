@@ -1,5 +1,45 @@
 import { remote } from './remote';
 import { store, StoreUserScript } from '../store';
+import { QUESTION_BRIDGE_VERSION } from '@ocs-desktop/common/web';
+
+export function isQuestionScript(script: StoreUserScript): boolean {
+	return (
+		/(?:^|[/\\])ocs(?:\.common)?\.user\.js(?:$|[?#])/i.test(script.info?.code_url || script.url) ||
+		/ocs\s*网课助手/i.test(script.info?.name || '')
+	);
+}
+
+export interface QuestionInstallation {
+	version: string;
+	bridgeVersion?: string;
+}
+
+export async function readQuestionInstallations(file: string): Promise<Record<string, QuestionInstallation>> {
+	if (!(await remote.fs.call('existsSync', file))) return {};
+	const text = String(await remote.fs.call('readFileSync', file, 'utf8'));
+	try {
+		const parsed = JSON.parse(text);
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Global script metadata does not prove that an individual browser profile has installed it. */
+export function questionScriptsForProfile(
+	scripts: StoreUserScript[],
+	installed: Record<string, QuestionInstallation>
+): StoreUserScript[] {
+	return scripts.map((script) =>
+		isQuestionScript(script)
+			? {
+					...script,
+					lastInstalledVersion: installed[script.url]?.version,
+					questionBridgeVersion: installed[script.url]?.bridgeVersion
+			  }
+			: script
+	);
+}
 
 /**
  * 将 .user.js 链接转换为 .meta.js 链接，并移除 version 查询参数
@@ -129,6 +169,7 @@ export interface ScriptToInstall {
 	script: StoreUserScript;
 	/** 确定的最新版本号，浏览器安装成功后用于更新 lastInstalledVersion */
 	latestVersion: string;
+	bridgeVersion?: string;
 }
 
 /**
@@ -157,6 +198,12 @@ export async function filterScriptsNeedingInstall(
 
 	for (const script of scripts) {
 		const codeUrl = script.info?.code_url || script.url;
+
+		// Adapter updates must reinstall even when the upstream version is unchanged or the network is weak.
+		if (isQuestionScript(script) && script.questionBridgeVersion !== QUESTION_BRIDGE_VERSION) {
+			result.push({ script, latestVersion: script.info?.version || '' });
+			continue;
+		}
 
 		// 1. 本地脚本始终安装
 		if (script.isLocalScript) {

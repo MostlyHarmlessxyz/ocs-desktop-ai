@@ -1,5 +1,6 @@
 import { app, BrowserWindow, WebContents } from 'electron';
 import { Logger } from '../logger';
+import { quitApp } from '../tray';
 
 /**
  * 处理错误
@@ -18,11 +19,11 @@ export function handleError() {
 			logger.warn('DevTools 渲染进程崩溃，已忽略（主窗口不受影响）');
 			return;
 		}
-		process.exit(0);
+		quitApp(1);
 	});
 	app.on('child-process-gone', (e, details) => {
 		logger.error('child-process-gone', details);
-		process.exit(0);
+		quitApp(1);
 	});
 
 	process.on('uncaughtException', (e) => {

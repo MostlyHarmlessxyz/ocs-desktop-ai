@@ -10,6 +10,7 @@ import type { AutomationScript } from './scripts/script';
 import type { Config } from './scripts/interface';
 import type { UpdateInformationResource } from './api';
 import type { getValidBrowsers } from './utils/valid.browser';
+import type { QuestionRemoteMethods } from './question';
 
 /** 应用持久化存储结构（主进程 electron-store 与渲染进程共享） */
 export interface AppStore {
@@ -82,6 +83,7 @@ export interface UserScripts {
 	isInternetLinkScript: boolean;
 	/** 上次成功安装到浏览器的版本，undefined 表示从未通过 OCS 安装过 */
 	lastInstalledVersion?: string;
+	questionBridgeVersion?: string;
 	/** 脚本信息上次更新时间（最新版本、描述等信息），0 表示从未更新 */
 	lastInfoUpdateTime?: number;
 }
@@ -101,7 +103,7 @@ export interface DownloadUserscriptResult {
  * 主进程 methods 远程调用契约。
  * 实现见 @ocs-desktop/app src/tasks/remote.register.ts（const methods: RemoteMethods）。
  */
-export interface RemoteMethods {
+export interface RemoteMethods extends QuestionRemoteMethods {
 	autoLaunch: () => void;
 	get: (url: string, config?: AxiosRequestConfig<any> | undefined) => Promise<any>;
 	getWithStatus: (url: string, config?: AxiosRequestConfig<any> | undefined) => Promise<{ status: number; data: any }>;
@@ -161,6 +163,7 @@ export interface ScriptWorkerBrowserInfo {
 }
 
 export interface ScriptWorkerBrowserConfig {
+	questionService?: { port: number; token: string; enabled: boolean };
 	/** 是否启用弹窗 */
 	enable_dialog?: boolean;
 	/** 是否启用浏览器界面预览（Page.startScreencast 推流） */

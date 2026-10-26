@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Resolve the application relative to this launcher without changing the caller's
+# working directory or environment (also inherited by the local Codex CLI).
+project_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+app_binary="$project_dir/releases/linux-unpacked/ocs-desktop-ai"
+if [[ -x "$project_dir/releases/current/ocs-desktop-ai" ]]; then
+  app_binary="$project_dir/releases/current/ocs-desktop-ai"
+fi
+
+if [[ ! -x "$app_binary" ]]; then
+  printf '%s\n' '尚未找到编译后的程序。请在 ocs-new 目录运行：pnpm build:linux' >&2
+  exit 1
+fi
+
+exec "$app_binary" "$@"

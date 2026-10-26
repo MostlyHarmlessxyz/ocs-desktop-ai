@@ -136,8 +136,9 @@ export async function unzip(input: string, output: string) {
 }
 
 export function getProjectPath() {
-	/** 这里多退出一层是因为打包后是运行在 ./lib 下面的 */
-	return app.isPackaged ? app.getAppPath() : path.resolve('./');
+	// Electron knows the app root in both development and packaged runs. The
+	// launcher's working directory may be the monorepo root or an unrelated folder.
+	return app.getAppPath();
 }
 
 /**

@@ -29,6 +29,7 @@
 		"vitest": "catalog:"
 	},
 	"dependencies": {
+		"@iarna/toml": "^2.2.5",
 		"@ocs-desktop/common": "workspace:^0.0.1",
 		"adm-zip": "^0.5.12",
 		"axios": "catalog:",

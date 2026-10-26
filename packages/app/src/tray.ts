@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, NativeImage } from 'electron';
 import path from 'path';
+import { shutdownQuestionService } from './question/integration';
 
 let tray: Tray | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -109,13 +110,11 @@ export function isAppQuitting() {
 }
 
 /**
- * 程序化退出应用：置位 isQuitting 后调用 app.exit。
- *
- * 必须通过本方法（而非直接 `app.exit`）触发退出，使 `window.on('close')` 走完整退出流程
- * （关闭浏览器 + 保存数据），而非「隐藏到托盘」。
+ * 渲染层完成浏览器关闭与保存后调用。等待搜题子进程与记录写入结束再退出。
  */
-export function quitApp(code = 0) {
+export async function quitApp(code = 0) {
 	isQuitting = true;
+	await shutdownQuestionService();
 	app.exit(code);
 }
 

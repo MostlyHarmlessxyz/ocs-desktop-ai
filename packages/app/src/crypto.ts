@@ -16,7 +16,7 @@ const KEY_PREFIX_PLAIN = 'v1:plain:';
 /** 密码加密导出格式前缀 */
 const EXPORT_PREFIX = 'v1:scrypt';
 /** keytar 存量密钥条目（阶段 1 保留：升格读取；不删除，保留回滚路径） */
-const KEYTAR_SERVICE = 'ocs-desktop';
+const KEYTAR_SERVICE = 'ocs-desktop-ai';
 const KEYTAR_ACCOUNT = 'aes-key';
 /** 导出密码的 scrypt 派生参数（写入密文格式，未来可调整） */
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };

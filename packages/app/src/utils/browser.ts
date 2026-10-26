@@ -7,6 +7,17 @@ import child_process from 'child_process';
  */
 export function getBrowserMajorVersion(executablePath: string) {
 	if (fs.existsSync(executablePath) === false) return;
+	// Linux executables do not use Windows manifests. Avoid traversing /usr/bin,
+	// where broken links or inaccessible directories can abort environment detection.
+	if (process.platform === 'linux') {
+		try {
+			const output = child_process.execFileSync(executablePath, ['--version'], { encoding: 'utf8', timeout: 5000 });
+			const major = output.match(/(\d+)\./)?.[1];
+			return major ? Number(major) : undefined;
+		} catch {
+			return;
+		}
+	}
 	if (process.platform === 'darwin') {
 		// 内置浏览器的版本查找方法
 		const versionsFolder = path.join(
@@ -44,19 +55,6 @@ export function getBrowserMajorVersion(executablePath: string) {
 	}
 	if (manifest && manifest.split('.').length > 1) {
 		return parseInt(manifest.split('.')[0]);
-	}
-
-	if (process.platform === 'linux') {
-		try {
-			const versionOutput = child_process.execFileSync(executablePath, ['--version'], {
-				encoding: 'utf-8'
-			});
-			const match = versionOutput.match(/(\d+)\./);
-			if (!match) return;
-			const major = parseInt(match[1]);
-			if (isNaN(major)) return;
-			return major;
-		} catch {}
 	}
 }
 

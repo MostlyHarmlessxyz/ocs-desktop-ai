@@ -21,6 +21,8 @@
 				<a-doption style="width: 200px"> </a-doption>
 
 				<a-doption @click="openSetup"> <Icon type="settings">初始化设置</Icon> </a-doption>
+				<a-doption @click="router.push('/questions')"> <Icon type="psychology">智能搜题</Icon> </a-doption>
+				<a-doption @click="router.push('/setting?panel=question')"> <Icon type="tune">搜题设置</Icon> </a-doption>
 				<a-doption
 					class="border-bottom"
 					@click="checkBrowserCaches"
@@ -67,6 +69,28 @@
 			</template>
 		</a-dropdown>
 
+		<button
+			class="question-shortcut"
+			:title="`正在处理 ${questionCounts.active} 题，待复核 ${questionCounts.pending} 题`"
+			@click="router.push(questionCounts.pending ? '/questions?tab=review' : '/questions')"
+		>
+			<Icon
+				type="psychology"
+				:size="15"
+			/>
+			<span>智能搜题</span>
+			<span
+				v-if="questionCounts.active"
+				class="question-count"
+				>{{ questionCounts.active }}</span
+			>
+			<span
+				v-if="questionCounts.pending"
+				class="question-count pending-count"
+				>待复核 {{ questionCounts.pending }}</span
+			>
+		</button>
+
 		<!-- 窗口置顶按钮：绝对定位避让系统 traffic light 控制区域（mac 在左侧，其余在右上角） -->
 		<PinButton />
 	</div>
@@ -74,6 +98,8 @@
 
 <script setup lang="ts">
 import { h, ref } from 'vue';
+import { useRouter } from 'vue-router';
+import { useQuestionUpdates } from '../features/question/useQuestionUpdates';
 import { fetchRemoteNotify, date, about, getRemoteInfos } from '../utils';
 import { remote } from '../utils/remote';
 import TitleLink from './TitleLink.vue';
@@ -91,6 +117,16 @@ import Icon from './Icon.vue';
 import PinButton from './PinButton.vue';
 
 const { shell } = electron;
+const router = useRouter();
+const questionCounts = ref({ active: 0, pending: 0 });
+useQuestionUpdates(async () => {
+	try {
+		const counts = await remote.methods.call('questionList', { pageSize: 1 });
+		questionCounts.value = { active: counts.active, pending: counts.pending };
+	} catch {
+		// The assistant page exposes detailed errors; the title remains usable.
+	}
+});
 
 // 打开初始化设置弹窗（手动触发时跳过「欢迎使用」引导，直接进入初始化）
 function openSetup() {
@@ -421,6 +457,34 @@ async function showVersionLogs() {
 
 .tutorial-tooltip {
 	padding: 8px 12px 0px 12px !important;
+}
+
+.question-shortcut {
+	-webkit-app-region: no-drag;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-left: 12px;
+	padding: 3px 9px;
+	border: 0;
+	border-radius: 6px;
+	background: var(--theme-bg-color-deep);
+	color: var(--theme-text-color);
+	font-size: 11px;
+	cursor: pointer;
+}
+.question-shortcut:hover {
+	color: var(--theme-primary-color);
+}
+.question-count {
+	padding: 1px 5px;
+	border-radius: 4px;
+	color: rgb(var(--primary-6));
+	background: rgb(var(--primary-1));
+}
+.pending-count {
+	color: rgb(var(--orange-6));
+	background: rgb(var(--orange-1));
 }
 
 body.platform-darwin {

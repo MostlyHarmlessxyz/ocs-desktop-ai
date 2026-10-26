@@ -6,6 +6,7 @@
  * '@ocs-desktop/common/web'。
  */
 export * from './src/constants';
+export * from './src/question';
 export * from './src/api';
 export { StringUtils } from './src/utils/string';
 export { normalizeUrl } from './src/utils/url';

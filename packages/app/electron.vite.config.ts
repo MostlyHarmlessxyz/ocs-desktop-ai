@@ -3,6 +3,8 @@ import vue from '@vitejs/plugin-vue';
 import { visualizer } from 'rollup-plugin-visualizer';
 import commonjs from 'vite-plugin-commonjs';
 import path from 'path';
+import fs from 'fs';
+import { transformWithEsbuild } from 'vite';
 
 /**
  * common 源码别名：直接编译 workspace 源码，跳过 common 的 tsc 产物，
@@ -19,7 +21,24 @@ export default defineConfig({
 		// common 必须排除出外部化：否则产物保留 require('@ocs-desktop/common')，
 		// 运行时去 node_modules 找 lib/index.js（lib 被 gitignore 且构建链不产出）导致启动崩溃；
 		// 排除后 common 源码经下方 alias 直接打进 out/main bundle
-		plugins: [externalizeDepsPlugin({ exclude: ['@ocs-desktop/common'] })],
+		plugins: [
+			{
+				name: 'question-runtime',
+				enforce: 'pre',
+				async load(id) {
+					if (!id.endsWith('?question-runtime')) return;
+					const file = id.slice(0, -'?question-runtime'.length);
+					this.addWatchFile(file);
+					const result = await transformWithEsbuild(fs.readFileSync(file, 'utf8'), file, {
+						loader: 'ts',
+						format: 'iife',
+						target: 'es2020'
+					});
+					return `export default ${JSON.stringify(result.code)}`;
+				}
+			},
+			externalizeDepsPlugin({ exclude: ['@ocs-desktop/common'] })
+		],
 		resolve: {
 			alias: commonAlias
 		},

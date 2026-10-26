@@ -1,3 +1,4 @@
+import './src/identity';
 import { app } from 'electron';
 import path from 'path';
 import { remoteRegister } from './src/tasks/remote.register';
@@ -8,17 +9,10 @@ import { createTray, isAppQuitting } from './src/tray';
 import { globalListenerRegister } from './src/tasks/global.listener';
 import { isLinuxSandboxUnavailable, task } from './src/utils';
 import { handleError } from './src/tasks/error.handler';
-import { updater } from './src/tasks/updater';
 import { startupServer } from './src/tasks/startup.server';
 import { initChrome } from './src/tasks/init.chrome';
 import { initCrypto } from './src/crypto';
 import { integrateAppImageDesktop } from './src/tasks/appimage.desktop';
-
-app.setName('OCS Desktop');
-
-// 设置应用用户模型 ID，使 Windows 通知（托盘气泡等）显示应用名 "OCS Desktop" 而非进程名 "Electron"。
-// 打包后与 electron-builder 的 appId（快捷方式 AUMID）保持一致，以正确关联应用图标与名称。
-app.setAppUserModelId(app.isPackaged ? 'ocs.enncy.cn' : 'OCS Desktop');
 
 // 防止软件崩溃以及兼容
 // Windows/macOS 维持原有 no-sandbox 行为不变；Linux 仅在沙箱不可用时才追加（见上）
@@ -56,10 +50,10 @@ function bootstrap() {
 			task('初始化加密密钥', () => initCrypto()).then(() =>
 				task('初始化本地设置', async () => {
 					initStore();
+					await task('初始化自动启动', () => autoLaunch());
 					await task('启动接口服务', () => startupServer());
 				})
 			),
-			task('初始化自动启动', () => autoLaunch()),
 			// AppImage 桌面集成（菜单入口/图标自注册），幂等，仅 Linux AppImage 生效
 			task('AppImage桌面集成', () => integrateAppImageDesktop()),
 			task('启动渲染进程', async () => {
@@ -99,15 +93,6 @@ function bootstrap() {
 					if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
 						window.webContents.send(isAppQuitting() ? 'quit' : 'close');
 					}
-				});
-
-				window.webContents.once('did-finish-load', () => {
-					setTimeout(() => {
-						// 因为需要对渲染进程发送信息，所以要在显示完成后开始监听
-						if (app.isPackaged) {
-							task('软件更新', () => updater());
-						}
-					}, 1000);
 				});
 
 				task('初始化远程通信模块', () => remoteRegister(window));

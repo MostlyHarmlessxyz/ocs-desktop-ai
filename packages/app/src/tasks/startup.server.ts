@@ -14,6 +14,7 @@ import { getInitStatus } from './init.status';
 import { probeNetwork } from './net.status';
 import { getServerToken } from './server.auth';
 import { isAllowedUserscriptPath } from '../utils/server.security';
+import { registerQuestionRoutes } from '../question/integration';
 const logger = Logger('server');
 
 /** 图标内存缓存（进程内一级缓存） */
@@ -197,10 +198,13 @@ async function fetchIcon(iconUrl: string): Promise<{ data: Buffer; contentType: 
 
 export async function startupServer() {
 	const app = express();
+	const port = Number(process.env.OCS_AI_PORT || DEFAULT_SERVER_PORT);
+	if (!Number.isInteger(port) || port < 1024 || port > 65535)
+		throw new Error('OCS_AI_PORT 必须为 1024–65535 之间的端口');
 
 	// authToken 改内存态持有（不落盘），store 中字段废弃置空；分发见 server.auth.ts
 	store.set('server', {
-		port: DEFAULT_SERVER_PORT,
+		port,
 		authToken: ''
 	});
 	// 启动即生成内存令牌
@@ -217,6 +221,8 @@ export async function startupServer() {
 		next();
 	});
 	// 解析 post 数据
+	// Question attachments have their own authenticated parser and transport limit.
+	registerQuestionRoutes(app);
 	app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 	app.use(express.json({ limit: '10mb' }));
 

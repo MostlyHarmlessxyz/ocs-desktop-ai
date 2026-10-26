@@ -27,6 +27,7 @@ import {
 import { hideToTray, quitApp, cancelQuit, destroyTray } from '../tray';
 import { getServerToken } from './server.auth';
 import { canOCR } from '../utils/ocr';
+import { questionMethods } from '../question/integration';
 
 /**
  * 将错误序列化为可跨 IPC 传输的普通对象。
@@ -114,6 +115,7 @@ let win: BrowserWindow | undefined;
 
 /** 需远程共享的方法（类型契约见 @ocs-desktop/common contract.ts） */
 const methods: RemoteMethods = {
+	...questionMethods,
 	autoLaunch,
 	get: (url: string, config?: AxiosRequestConfig<any> | undefined) => axios.get(url, config).then((res) => res.data),
 	getWithStatus: (url: string, config?: AxiosRequestConfig<any> | undefined) =>

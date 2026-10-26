@@ -147,6 +147,14 @@ function applyUpdaterConfig() {
 }
 
 export async function updater(config?: AppStore['updater']) {
+	if (app.getName() === 'OCS Desktop AI') {
+		return {
+			current: app.getVersion(),
+			latest: app.getVersion(),
+			hasUpdate: false,
+			message: 'OCS Desktop AI 使用独立发布包，请从本地构建或 fork 的发行页面更新。'
+		};
+	}
 	listenUpdaterEvents();
 	/**
 	 * 渲染层手动检查更新时会携带最新配置（持久化防抖可能尚未落盘），
@@ -194,5 +202,6 @@ export async function updater(config?: AppStore['updater']) {
  * IPC 方法名保持 updateApp 不变，内部由“下载zip+删目录+解压”改为 electron-updater 安装包下载。
  */
 export async function updateApp() {
+	if (app.getName() === 'OCS Desktop AI') throw new Error('定制版不支持从官方更新源覆盖安装');
 	await autoUpdater.downloadUpdate();
 }

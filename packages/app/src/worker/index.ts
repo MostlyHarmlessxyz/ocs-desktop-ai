@@ -12,6 +12,8 @@ import os from 'os';
 import crypto from 'crypto';
 import type { AddressInfo } from 'net';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
+import { installQuestionBinding, QuestionBridgeSession } from '../question-browser/binding';
+import { browserDisplayOptions } from '../utils/browser-display';
 
 const { bgRedBright, bgBlueBright, bgYellowBright, bgGray } = new Chalk({ level: 2 });
 
@@ -30,6 +32,7 @@ type BrowserConfig = {
 	script_assistance?: boolean;
 	/** 文件下载优化：恢复浏览器原生下载行为（默认开启，关闭后可能无法下载文件） */
 	download_optimization?: boolean;
+	questionService?: QuestionBridgeSession;
 };
 
 interface Langs {
@@ -73,6 +76,7 @@ export class ScriptWorker implements ScriptWorkerContract {
 	private screencastStarting = false;
 	/** 关闭屏障：close() 开始后阻止新的 screencast session 附着，避免 browser.close() 与推流竞争挂起 */
 	private closing = false;
+	private questionBindingCleanup?: () => Promise<void>;
 	/** 背压：允许渲染端在途未消费的最大帧数（超限暂缓 ack，Chromium 自动降速） */
 	private static readonly SCREENCAST_MAX_IN_FLIGHT = 6;
 	/** 在途未消费帧数（渲染端汇报消费后递减） */
@@ -222,6 +226,9 @@ export class ScriptWorker implements ScriptWorkerContract {
 		/** 启动浏览器 */
 		try {
 			await launchBrowser({
+				onQuestionBinding: (cleanup) => {
+					this.questionBindingCleanup = cleanup;
+				},
 				onLaunch: (browser) => {
 					this.browser = browser;
 
@@ -278,7 +285,9 @@ export class ScriptWorker implements ScriptWorkerContract {
 			// 启动失败统一处理：发出 browser-closed 并退出进程，
 			// 避免渲染进程 Process.status 滞留 'launching'、卡片一直转圈只能重启软件恢复。
 			if (err instanceof Error) {
-				if (
+				if (/XServer|Missing X server|Wayland.*(?:display|显示)|桌面显示会话/i.test(err.message)) {
+					console.error('浏览器无法连接桌面显示会话，请从当前桌面重新启动 OCS。', err.message.substring(0, 1000));
+				} else if (
 					err.message.includes('browser has been closed') ||
 					err.message.includes('Target closed') ||
 					err.message.includes('Browser closed')
@@ -316,6 +325,8 @@ export class ScriptWorker implements ScriptWorkerContract {
 		// 先置关闭屏障：阻止在途的 startScreencast 后续附着新的 CDP screencast session，
 		// 否则 browser.close() 撞上活跃 screencast 可能永久挂起（渲染端一直转圈）
 		this.closing = true;
+		await this.questionBindingCleanup?.();
+		this.questionBindingCleanup = undefined;
 		this.stopPageListTracking();
 		// 仅内部停止推流（detach session），不发 screencast-cleared：
 		// 渲染进程在 browser-closed 时保留最后一帧，用于"浏览器关闭后的预览图"展示
@@ -342,6 +353,8 @@ export class ScriptWorker implements ScriptWorkerContract {
 	 * 用于防止父进程（渲染进程）被强杀（如 dev 调试 Ctrl+C）后 worker 及其 Chromium 成为孤儿进程。
 	 */
 	async dispose() {
+		await this.questionBindingCleanup?.();
+		this.questionBindingCleanup = undefined;
 		try {
 			this.stopPageListTracking();
 		} catch {}
@@ -968,6 +981,7 @@ export async function launchBrowser({
 	uid,
 	config,
 	downloadsPath,
+	onQuestionBinding,
 	onLaunch
 }: Required<Pick<LaunchOptions, 'executablePath' | 'headless' | 'args'>> & {
 	/** 用户数据目录 */
@@ -994,11 +1008,14 @@ export async function launchBrowser({
 	config?: BrowserConfig;
 	/** 网页下载文件保存目录（未传入时回退为本地浏览器下载） */
 	downloadsPath?: string;
+	onQuestionBinding?: (cleanup: () => Promise<void>) => void;
 	onLaunch?: (browser: BrowserContext) => void;
 }) {
 	return new Promise<void>((resolve, reject) => {
 		// 启动前把浏览器 profile 的默认下载目录指向软件"文件下载"目录（原生下载行为落盘位置）
 		prepareDownloadPreferences(userDataDir, downloadsPath);
+		const display = browserDisplayOptions(process.env, args, headless);
+		console.log('浏览器显示后端：', display.backend);
 
 		chromium
 			.launchPersistentContext(userDataDir, {
@@ -1007,6 +1024,7 @@ export async function launchBrowser({
 				executablePath,
 				ignoreHTTPSErrors: true,
 				acceptDownloads: true,
+				env: display.env,
 				ignoreDefaultArgs: ['--disable-extensions', '--enable-automation'],
 				args: [
 					'--window-position=0,0',
@@ -1021,10 +1039,13 @@ export async function launchBrowser({
 					...(process.platform === 'linux' ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
 					// 浏览器增强（防休眠/防冻结）附加参数，开关关闭时为空数组
 					...formatBrowserEnhancementArgs(config),
-					...args
+					...display.args
 				]
 			})
 			.then(async (browser) => {
+				// Bind before any course navigation or userscript installation can run.
+				const cleanupQuestions = await installQuestionBinding(browser, uid, config?.questionService);
+				onQuestionBinding?.(cleanupQuestions);
 				// 恢复浏览器原生下载行为（behavior:'default'，保留 download 事件）：
 				// 下载气泡显示真实文件名、文件原生落盘到"文件下载"目录；
 				// 事件仍触发，供 page.on('download') 截胡转发到本地默认浏览器（取消失败时原生落盘兜底）

@@ -1,3 +1,4 @@
+import './identity';
 import { app } from 'electron';
 import path from 'path';
 import { existsSync, readFileSync, copyFileSync } from 'fs';

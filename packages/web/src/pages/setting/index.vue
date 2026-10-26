@@ -32,7 +32,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import Icon from '../../components/Icon.vue';
 import { devSession } from '../../store';
 
@@ -41,11 +42,13 @@ const panels = {
 	ocs: defineAsyncComponent(() => import('../../components/setting/OcsConfigPanel.vue')),
 	'app-center': defineAsyncComponent(() => import('../../components/ResourcesCard.vue')),
 	general: defineAsyncComponent(() => import('../../components/SettingPanel.vue')),
+	question: defineAsyncComponent(() => import('../../features/question/QuestionSettings.vue')),
 	developer: defineAsyncComponent(() => import('../../components/setting/DeveloperSettingPanel.vue'))
 };
 
 const allMenus = [
 	{ key: 'general', title: '通用设置', icon: 'settings' },
+	{ key: 'question', title: '智能搜题', icon: 'psychology' },
 	{ key: 'ocs', title: '脚本配置', icon: 'code' },
 	{ key: 'app-center', title: '应用中心', icon: 'apps' },
 	{ key: 'developer', title: '开发者设置', icon: 'build' }
@@ -57,7 +60,23 @@ type MenuKey = (typeof allMenus)[number]['key'];
 const settingMenus = computed(() => allMenus.filter((m) => m.key !== 'developer' || devSession.enabled));
 
 /** 当前子菜单：默认显示通用设置 */
-const activeMenu = ref<MenuKey>('general');
+const route = useRoute();
+const router = useRouter();
+function panelFromQuery(value: unknown): MenuKey {
+	return allMenus.some((menu) => menu.key === value && (value !== 'developer' || devSession.enabled))
+		? (value as MenuKey)
+		: 'general';
+}
+const activeMenu = ref<MenuKey>(panelFromQuery(route.query.panel));
+watch(
+	() => route.query.panel,
+	(value) => {
+		activeMenu.value = panelFromQuery(value);
+	}
+);
+watch(activeMenu, (value) => {
+	if (route.query.panel !== value) router.replace({ query: { ...route.query, panel: value } });
+});
 
 const activePanel = computed(() => panels[activeMenu.value]);
 </script>

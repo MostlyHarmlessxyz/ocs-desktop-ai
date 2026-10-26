@@ -44,12 +44,7 @@ export function getValidBrowsers(): ValidBrowser[] {
 			].filter((b) => b.path) as ValidBrowser[];
 		}
 		case 'linux': {
-			return [
-				{
-					name: '软件内置浏览器-谷歌(Chrome)',
-					path: resolveBrowserPath('bin/chrome/chrome/chrome')
-				}
-			].filter((b) => b.path) as ValidBrowser[];
+			return builtin;
 		}
 		default: {
 			// darwin / linux：仅提供内置浏览器

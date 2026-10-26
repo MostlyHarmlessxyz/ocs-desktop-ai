@@ -60,7 +60,7 @@ function registerRemote<T>(eventName: string) {
 				cleanup();
 				if (payload?.error) {
 					const err = toError(payload.error);
-					if (!errorFilter(err.message)) {
+					if (!errorFilter(err.message) && args[1] !== 'prepareQuestionUserscript') {
 						console.log({ payload, channel, args });
 						notify('remote 模块错误', err, 'remote', { copy: true, type: 'error' });
 					}
@@ -70,12 +70,15 @@ function registerRemote<T>(eventName: string) {
 				}
 			};
 			// 超时兜底：主进程未回复（如 webContents 已销毁、reply 抛错）时拒绝并清理监听，避免 Promise 永久 pending
-			const timer = setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				cleanup();
-				reject(new Error(`remote 调用超时：${channel}`));
-			}, REMOTE_CALL_TIMEOUT);
+			const timer = setTimeout(
+				() => {
+					if (settled) return;
+					settled = true;
+					cleanup();
+					reject(new Error(`remote 调用超时：${channel}`));
+				},
+				args[1] === 'questionTest' ? 630000 : REMOTE_CALL_TIMEOUT
+			);
 			ipcRenderer.on(respondChannel, onRespond);
 			// 直接使用 Electron 原生 structured clone 传输，支持 Buffer/Date/Map/Set/undefined/循环引用
 			// （此前用 JSON.parse(JSON.stringify(args)) 会丢失这些类型，与同步路径行为不一致）

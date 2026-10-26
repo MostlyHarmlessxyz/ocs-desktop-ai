@@ -11,7 +11,14 @@ import EventEmitter from 'events';
 import { child_process, electron } from './node';
 import { notify } from './notify';
 import { Status } from './statusBar';
-import { filterScriptsNeedingInstall, ScriptToInstall } from './script-version';
+import {
+	filterScriptsNeedingInstall,
+	ScriptToInstall,
+	isQuestionScript,
+	QuestionInstallation,
+	questionScriptsForProfile,
+	readQuestionInstallations
+} from './script-version';
 import { notifyOcrMissingAfterLaunch } from './ocr';
 import { detectWeakNetwork } from './index';
 
@@ -310,6 +317,7 @@ export class Process extends EventEmitter {
 				tags: this.browser.tags
 			},
 			config: {
+				questionService: remote.methods.callSync('questionBridgeSession'),
 				enable_dialog: store.render.setting.browser.enableDialog,
 				screenshot_preview: store.render.setting.browser.screenshotPreview,
 				browser_enhancement: store.render.setting.browser.browserEnhancement,
@@ -362,7 +370,19 @@ export class Process extends EventEmitter {
 			// 弱网探测（3s）：弱网模式下跳过脚本版本远程检查，已安装脚本视为最新，加速启动
 			const weakNetwork = await detectWeakNetwork();
 			Status.loading(weakNetwork ? '检测到弱网环境，跳过脚本更新检查...' : '正在检查脚本更新...');
-			const scriptsToInstall = await filterScriptsNeedingInstall(enabledUserScripts, { skipRemoteCheck: weakNetwork });
+			const installationFile = await remote.path.call('join', this.browser.cachePath, '.ocs-ai-userscripts.json');
+			let installations: Record<string, QuestionInstallation> = {};
+			try {
+				installations = await readQuestionInstallations(installationFile);
+			} catch {
+				/* New profiles have no successful installations yet. */
+			}
+			const candidates = questionScriptsForProfile(enabledUserScripts, installations);
+			const checkedScripts = await filterScriptsNeedingInstall(candidates, { skipRemoteCheck: weakNetwork });
+			const scriptsToInstall = checkedScripts.map((item) => ({
+				...item,
+				script: enabledUserScripts.find((script) => script.id === item.script.id) || item.script
+			}));
 			if (scriptsToInstall.length > 0) {
 				Status.loading(`正在启动 ${this.browser.name}（需更新/安装 ${scriptsToInstall.length} 个脚本）...`);
 			} else {
@@ -379,7 +399,14 @@ export class Process extends EventEmitter {
 				const script = item.script;
 				if (script.isLocalScript) {
 					const localPath = script.info?.code_url || script.url;
-					const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(localPath)}`;
+					const prepared = await remote.methods.call('prepareQuestionUserscript', {
+						path: localPath,
+						sourceUrl: script.info?.code_url || script.url,
+						browserUid: this.uid
+					});
+					item.bridgeVersion = prepared.bridgeVersion;
+					item.latestVersion = prepared.upstreamVersion || item.latestVersion;
+					const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(prepared.path)}`;
 					userscripts.push(installUrl);
 					urlToItem.set(installUrl, item);
 				} else {
@@ -398,9 +425,28 @@ export class Process extends EventEmitter {
 					const { item, remoteUrl } = remoteItems[i];
 					const r = results?.[i];
 					if (r && r.success && r.path) {
-						const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(r.path)}`;
-						userscripts.push(installUrl);
-						urlToItem.set(installUrl, item);
+						try {
+							const prepared = await remote.methods.call('prepareQuestionUserscript', {
+								path: r.path,
+								sourceUrl: remoteUrl,
+								browserUid: this.uid
+							});
+							item.bridgeVersion = prepared.bridgeVersion;
+							item.latestVersion = prepared.upstreamVersion || item.latestVersion;
+							const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(
+								prepared.path
+							)}`;
+							userscripts.push(installUrl);
+							urlToItem.set(installUrl, item);
+						} catch (error) {
+							notify('智能搜题兼容检查失败', String(error), 'question-adapter-' + remoteUrl, {
+								duration: 60000,
+								type: 'warning',
+								copy: true
+							});
+							Status.clear();
+							return;
+						}
 					} else {
 						// 预下载失败：剔除并通知，不更新 lastInstalledVersion（下次重试）
 						notify(
@@ -415,11 +461,20 @@ export class Process extends EventEmitter {
 
 			// 接收 worker 回传的安装结果，按成功情况更新 lastInstalledVersion
 			this.once('userscript-install-result', (results: InstallResult[]) => {
+				let questionInstalled = false;
 				for (const r of results || []) {
 					const item = urlToItem.get(r.url);
 					if (!item) continue;
 					if (r.success) {
 						item.script.lastInstalledVersion = item.latestVersion;
+						item.script.questionBridgeVersion = item.bridgeVersion;
+						if (isQuestionScript(item.script)) {
+							installations[item.script.url] = {
+								version: item.latestVersion || item.script.info?.version || '',
+								bridgeVersion: item.bridgeVersion
+							};
+							questionInstalled = true;
+						}
 					} else {
 						notify(
 							'脚本安装失败',
@@ -429,6 +484,13 @@ export class Process extends EventEmitter {
 						);
 					}
 				}
+				if (questionInstalled) {
+					const temporary = installationFile + '.tmp';
+					remote.fs
+						.call('writeFileSync', temporary, JSON.stringify(installations), { mode: 0o600 })
+						.then(() => remote.fs.call('renameSync', temporary, installationFile))
+						.catch((error) => console.warn('无法保存浏览器搜题脚本安装状态，下次启动将重新验证', error));
+				}
 				Status.clear();
 			});
 			this.shell?.once('exit', () => {
@@ -436,7 +498,8 @@ export class Process extends EventEmitter {
 			});
 			return { userscripts, enabledScriptCount: enabledUserScripts.length };
 		} catch (err) {
-			Message.error('浏览器路径读取错误 : ' + String(err));
+			Status.clear();
+			Message.error('浏览器启动准备失败 : ' + String(err));
 		}
 	}
 
@@ -472,11 +535,13 @@ export class Process extends EventEmitter {
 					} else {
 						// launchPreCheck 失败（路径为空/不存在/读取错误等）：状态回落，Promise 结束
 						this.status = 'closed';
+						if (this.shell?.connected) this.worker?.('close');
 						resolve(null);
 					}
 				})
 				.catch((err) => {
 					this.status = 'closed';
+					if (this.shell?.connected) this.worker?.('close');
 					reject(err);
 				});
 		});

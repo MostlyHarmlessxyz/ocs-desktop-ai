@@ -43,6 +43,15 @@ export const config = reactive({
 					}
 				},
 				{
+					name: 'questions',
+					path: 'questions',
+					component: () => import('@/features/question/QuestionPage.vue'),
+					meta: {
+						icon: 'psychology',
+						title: '智能搜题'
+					}
+				},
+				{
 					name: 'setting',
 					path: 'setting',
 					component: () => import('@/pages/setting/index.vue'),

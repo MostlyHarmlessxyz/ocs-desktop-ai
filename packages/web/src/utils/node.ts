@@ -17,6 +17,7 @@ export const electron: typeof Electron = window.electron || {
 		sendSync: () => {},
 		send: () => {},
 		on: () => {},
+		removeListener: () => {},
 		once: () => {}
 	}
 };
