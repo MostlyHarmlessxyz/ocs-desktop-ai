@@ -424,11 +424,15 @@ export function createQuestionRuntime() {
 			);
 			const stems = titles.filter((element) => !titles.some((other) => other !== element && other.contains(element)));
 			const options = (context.elements.options || []).filter(Boolean);
-			if (!stems.length || (!options.length && ['single', 'multiple', 'judgement'].includes(input.type || ''))) {
-				throw new Error('题干或选项截图区域缺失，已停止猜测文字');
+			const completion = ['completion', 'fill-blank'].includes(input.type || '');
+			if (
+				!stems.length ||
+				(!options.length && (completion || ['single', 'multiple', 'judgement'].includes(input.type || '')))
+			) {
+				throw new Error('题干或作答区域缺失，已停止猜测文字');
 			}
-			input.options = options.map(
-				(_option, index) => `选项 ${index < 26 ? String.fromCharCode(65 + index) : index + 1}（见图片）`
+			input.options = options.map((_option, index) =>
+				completion ? `第 ${index + 1} 空` : `选项 ${index < 26 ? String.fromCharCode(65 + index) : index + 1}（见图片）`
 			);
 			const parts = [
 				...stems.map((element, index) => ({
@@ -437,7 +441,9 @@ export function createQuestionRuntime() {
 					label: `题干 ${index + 1}`,
 					text: element.textContent || ''
 				})),
-				...options.map((element, index) => ({
+				// Completion options are answer fields, often hidden UEditor
+				// textareas. They supply blank count/order, not question images.
+				...(completion ? [] : options).map((element, index) => ({
 					id: mark(element),
 					role: 'option',
 					text: element.textContent || '',
@@ -499,6 +505,10 @@ export function createQuestionRuntime() {
 			images,
 			imageErrors
 		};
+		if (['completion', 'fill-blank'].includes(input.type || '') && context?.elements?.options) {
+			// Empty field values must not collapse two or more blanks into zero.
+			input.options = context.elements.options.filter(Boolean).map((_option, index) => `第 ${index + 1} 空`);
+		}
 		for (const previous of sessions.values()) {
 			if (
 				previous.input.question === input.question &&

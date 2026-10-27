@@ -171,4 +171,4 @@ export interface QuestionRemoteMethods {
 	questionControl: (action: 'pause' | 'resume' | 'cancel' | 'retry', id?: string) => Promise<void>;
 	questionResolve: (id: string, answers: string[]) => Promise<QuestionDecision>;
 }
-export const QUESTION_BRIDGE_VERSION = 'ai-7';
+export const QUESTION_BRIDGE_VERSION = 'ai-9';

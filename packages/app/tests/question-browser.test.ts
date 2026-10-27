@@ -505,6 +505,56 @@ describe('question browser runtime', () => {
 		expect(result.finish).toBe(true);
 		expect(options.map((option: any) => option.querySelector('textarea').value)).toEqual(['second', 'second']);
 	});
+	it.each(['completion', 'fill-blank'])(
+		'captures only the stem for visual %s questions with hidden editor fields',
+		async (type) => {
+			const fixture = page(
+				'<div class="TiMu"><h3 class="font-cxsecret">Synthetic ___ and ___</h3>' +
+					'<ul><li><textarea style="display:none"></textarea><iframe></iframe></li>' +
+					'<li><textarea style="display:none"></textarea><iframe></iframe></li></ul></div>'
+			);
+			const root = fixture.window.document.querySelector('.TiMu');
+			const options = [...root.querySelectorAll('textarea')];
+			const bridge = fixture.window.__ocsQuestionBridge;
+			let captured: any;
+			fixture.window.__ocsQuestionBridge = async (operation: string, data: any) => {
+				if (operation !== 'capture') return bridge(operation, data);
+				captured = data;
+				for (const part of data.parts) {
+					const element = root.querySelector(`[data-ocs-ai-capture="${part.id}"]`);
+					if (element.matches('textarea')) throw new Error('element is not visible');
+				}
+				return { images: data.parts.map(() => pngData), imageLabels: data.parts.map((part: any) => part.label) };
+			};
+			await fixture.runtime.begin(
+				{ title: 'Synthetic ___ and ___', type, options: '' },
+				{ root, type, elements: { title: [root.querySelector('h3')], options } }
+			);
+			const input = fixture.calls.find((call) => call.operation === 'begin').data;
+			expect(input.imageErrors).toEqual([]);
+			expect(captured.parts.map((part: any) => part.role)).toEqual(['stem']);
+			expect(input.images).toHaveLength(1);
+			expect(input.options).toEqual(['第 1 空', '第 2 空']);
+			expect(options.every((option: any) => !option.hasAttribute('data-ocs-ai-capture'))).toBe(true);
+		}
+	);
+	it('preserves blank count through the actual 5.x answerer when blank text is empty', async () => {
+		const fixture = page(
+			'<div class="questionLi"><h3 class="title">Synthetic two blanks</h3>' +
+				'<textarea class="answer_p"></textarea><textarea class="answer_p"></textarea></div>',
+			{
+				'task-1': { taskId: 'task-1', status: 'agree', answer: ['first', 'second'], submissionBlocked: false }
+			}
+		);
+		const { worker } = fiveWorker(fixture, 'completion');
+		const results = await worker.doWork();
+		expect(fixture.calls.find((call) => call.operation === 'begin').data.options).toEqual(['第 1 空', '第 2 空']);
+		expect(results[0].result.finish).toBe(true);
+		expect([...fixture.window.document.querySelectorAll('textarea')].map((field: any) => field.value)).toEqual([
+			'first',
+			'second'
+		]);
+	});
 	it('removes extra multiple-choice selections and verifies all requested choices', async () => {
 		const fixture = page(
 			'<div id="root"><div class="answerBg"><label class="answer_p"><input type="checkbox" checked>A</label><label class="answer_p"><input type="checkbox">B</label><label class="answer_p"><input type="checkbox" checked>C</label></div></div>',

@@ -21,11 +21,22 @@ export async function captureQuestion(frame: Frame, request: QuestionCaptureRequ
 	if (request.parts.some((part) => !validId(part?.id) || !['stem', 'option'].includes(part.role))) {
 		throw new Error('题目截图区域无效');
 	}
+	const frameOrigin = (target: Frame) => {
+		try {
+			return new URL(target.url()).origin;
+		} catch {
+			// Playwright exposes newly attached frames before their first URL is
+			// available. An unrelated loading frame must not abort this question.
+			return undefined;
+		}
+	};
 	const frames = [frame];
-	const origin = new URL(frame.url()).origin;
+	const origin = frameOrigin(frame);
+	if (!isCurrent() || frame.isDetached() || origin === undefined)
+		throw new Error('题目页面尚未加载完成或已变化，请重新搜题');
 	for (const parent of frames) {
 		for (const child of parent.childFrames()) {
-			if (new URL(child.url()).origin === origin) frames.push(child);
+			if (!child.isDetached() && frameOrigin(child) === origin) frames.push(child);
 		}
 	}
 	const matches = (

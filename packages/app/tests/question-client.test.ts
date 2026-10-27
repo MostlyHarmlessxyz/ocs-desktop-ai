@@ -37,6 +37,25 @@ describe('Codex 参数与严格输出', () => {
 			enum: ['A', 'B']
 		});
 	});
+	it.each(['completion', 'fill-blank'])(
+		'requires exactly one answer per %s field without choice-letter constraints',
+		(type) => {
+			const question = {
+				question: 'Synthetic blanks',
+				type,
+				options: ['第 1 空', '第 2 空'],
+				contentMode: 'visual' as const
+			};
+			const answer = answerSchema(question).properties.answer;
+			expect(answer.items).toEqual({ type: 'string' });
+			expect(answer.minItems).toBe(2);
+			expect(answer.maxItems).toBe(2);
+			expect(parseAnswer('{"answer":["same","same"],"explanation":"synthetic"}', question).answer).toEqual([
+				'same',
+				'same'
+			]);
+		}
+	);
 	it('浏览器图片读取失败时记录错误，不把缺图题发送给模型', async () => {
 		const config = invocation(new QuestionConfiguration().get());
 		const result = await executeCodex(
