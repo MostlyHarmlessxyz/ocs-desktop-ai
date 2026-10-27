@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto';
 import axios from 'axios';
 import type { QuestionCall, QuestionInput, QuestionHealth } from '@ocs-desktop/common';
 import type { Invocation } from './config';
-import { questionFingerprint, normalizeAnswer, scriptAnswer } from './answers';
+import { questionFingerprint, normalizeAnswer, scriptAnswer, questionInputError } from './answers';
 
 export const ANSWER_SCHEMA = {
 	type: 'object',
@@ -231,13 +231,8 @@ export async function executeCodex(
 ): Promise<QuestionCall> {
 	const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ocs-ai-'));
 	try {
-		if (input.imageErrors?.length) throw new Error('题目图片不完整：' + input.imageErrors.join('；'));
-		if (
-			input.contentMode === 'visual' &&
-			(!input.images?.length || input.imageLabels?.length !== input.images.length)
-		) {
-			throw new Error('原始字形题图或图片标签缺失，已停止发送不可靠的文字');
-		}
+		const inputError = questionInputError(input);
+		if (inputError) throw new Error(inputError);
 		const images = await prepareImages(input, dir, signal);
 		if (signal.aborted) throw abortError();
 		const schemaPath = path.join(dir, 'answer-schema.json');

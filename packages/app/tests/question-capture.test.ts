@@ -18,6 +18,7 @@ function mockFrame(url: string, hasQuestion = false) {
 	const state = { url, detached: false, children: [] as Frame[], parent: null as Frame | null };
 	const snapshot = { evaluate: vi.fn(async () => {}), dispose: vi.fn(async () => {}) };
 	const screenshot = vi.fn(async () => image);
+	const page = { evaluate: async () => ({ x: 0, y: 0 }), screenshot };
 	const locator = vi.fn((selector: string): any => {
 		const id = /data-ocs-ai-capture="([^"]+)"/.exec(selector)?.[1];
 		const part = request.parts.find((part) => part.id === id);
@@ -25,8 +26,12 @@ function mockFrame(url: string, hasQuestion = false) {
 			count: async () => (hasQuestion && (id === request.rootId || part) ? 1 : 0),
 			evaluate: async () => true,
 			evaluateHandle: async () => snapshot,
+			elementHandle: async () => ({ evaluateHandle: async () => snapshot, dispose: async () => {} }),
 			textContent: async () => part?.text || '',
-			screenshot,
+			boundingBox: async () => ({ x: 0, y: 0, width: 1, height: 1 }),
+			screenshot: () => {
+				throw new Error('Element screenshot must not wait on animation frames');
+			},
 			locator
 		};
 	});
@@ -35,6 +40,7 @@ function mockFrame(url: string, hasQuestion = false) {
 		isDetached: () => state.detached,
 		childFrames: () => state.children,
 		parentFrame: () => state.parent,
+		page: () => page,
 		frameElement: async () => ({ evaluateHandle: async () => snapshot, dispose: async () => {} }),
 		waitForFunction: async () => {},
 		locator

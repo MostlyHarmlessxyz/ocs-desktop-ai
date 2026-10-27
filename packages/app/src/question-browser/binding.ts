@@ -8,7 +8,7 @@ export interface QuestionBridgeSession {
 	token: string;
 	enabled: boolean;
 }
-type Operation = 'begin' | 'complete' | 'status' | 'decision' | 'disconnect';
+type Operation = 'begin' | 'complete' | 'status' | 'decision' | 'decisions' | 'disconnect';
 interface FrameState {
 	pageId: string;
 	url: string;
@@ -97,7 +97,9 @@ export function postQuestionBridge(session: QuestionBridgeSession, operation: Op
 				response.on('error', reject);
 			}
 		);
-		request.setTimeout(61 * 60 * 1000, () => request.destroy(new Error('智能搜题请求超时')));
+		request.setTimeout(operation === 'complete' ? 61 * 60 * 1000 : 10000, () =>
+			request.destroy(new Error('智能搜题请求超时'))
+		);
 		request.on('error', reject);
 		request.end(body);
 	});
@@ -152,7 +154,7 @@ export async function installQuestionBinding(
 		) {
 			throw new Error('当前页面无法使用智能搜题桥接');
 		}
-		if (!['begin', 'complete', 'status', 'decision', 'capture'].includes(String(operation)))
+		if (!['begin', 'complete', 'status', 'decision', 'decisions', 'capture'].includes(String(operation)))
 			throw new Error('不支持的智能搜题操作');
 		let state = states.get(frame);
 		if (!state) {
@@ -162,13 +164,23 @@ export async function installQuestionBinding(
 		if (!state.active || state.url !== frame.url()) throw new Error('题目页面已变化');
 		if (operation === 'capture') {
 			const current = state;
-			const pending = (captureQueues.get(page) || Promise.resolve()).then(() =>
-				captureQuestion(
+			let expired = false;
+			let timer: ReturnType<typeof setTimeout>;
+			const timeout = new Promise<never>((resolve, reject) => {
+				timer = setTimeout(() => {
+					expired = true;
+					reject(new Error('题目采集排队超时，请稍后重新搜题'));
+				}, 30000);
+			});
+			const pending = (captureQueues.get(page) || Promise.resolve()).then(() => {
+				if (expired) throw new Error('题目采集请求已过期');
+				if (closing || !current.active || current.url !== frame.url()) throw new Error('题目页面已变化');
+				return captureQuestion(
 					frame,
 					data as QuestionCaptureRequest,
-					() => !closing && current.active && current.url === frame.url()
-				)
-			);
+					() => !expired && !closing && current.active && current.url === frame.url()
+				);
+			});
 			captureQueues.set(
 				page,
 				pending.then(
@@ -176,7 +188,23 @@ export async function installQuestionBinding(
 					() => {}
 				)
 			);
-			return pending;
+			try {
+				return await Promise.race([pending, timeout]);
+			} finally {
+				clearTimeout(timer!);
+			}
+		}
+		if (operation === 'decisions') {
+			const current = state;
+			if (
+				!Array.isArray(data?.taskIds) ||
+				data.taskIds.length > 500 ||
+				data.taskIds.some((id: unknown) => typeof id !== 'string' || !current.tasks.has(id))
+			)
+				throw new Error('题目任务不属于当前页面');
+			const result = await postQuestionBridge(session, 'decisions', { taskIds: data.taskIds });
+			if (!current.active || current.url !== frame.url()) throw new Error('题目页面已变化');
+			return result;
 		}
 		if (operation === 'begin') {
 			const result = await postQuestionBridge(session, 'begin', {
@@ -187,6 +215,7 @@ export async function installQuestionBinding(
 				imageErrors: data?.imageErrors,
 				contentMode: data?.contentMode,
 				imageLabels: data?.imageLabels,
+				rootId: data?.rootId,
 				assessment: data?.assessment,
 				formalExam: data?.formalExam,
 				browserUid: uid,

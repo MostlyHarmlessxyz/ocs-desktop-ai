@@ -18,7 +18,8 @@ import {
 	scriptAnswer,
 	sameAnswer,
 	normalizeQuestion,
-	questionFingerprint
+	questionFingerprint,
+	questionInputError
 } from './answers';
 import { QuestionRecords } from './records';
 
@@ -46,6 +47,7 @@ export class QuestionService {
 	private runtime = new Map<string, Runtime>();
 	private calls = new Map<string, QuestionCall>();
 	private paused = false;
+	private saveScheduled = false;
 	private wake = new Set<() => void>();
 	private cache = new Map<string, { answer: string[]; manual: boolean }>();
 	private pool: CodexPool;
@@ -58,6 +60,10 @@ export class QuestionService {
 		this.pool = pool || new CodexPool((call) => this.onCall(call));
 		for (const task of records.load()) {
 			task.pageConnected = false;
+			if (task.phase === 'review') {
+				task.expired = true;
+				if (questionInputError(task.input)) task.phase = 'error';
+			}
 			if (ACTIVE.has(task.phase)) {
 				task.phase = 'error';
 				task.error = '应用已重启，原任务已停止';
@@ -68,6 +74,7 @@ export class QuestionService {
 				this.cache.set(this.cacheKey(task), { answer: task.answer, manual: true });
 			}
 		}
+		if (this.tasks.size) this.records.saveTasks([...this.tasks.values()]);
 	}
 
 	private onCall(call: QuestionCall) {
@@ -87,16 +94,22 @@ export class QuestionService {
 	}
 
 	private changed() {
-		const reviews = [...this.tasks.values()].filter((t) => t.phase === 'review' && !t.expired);
-		for (const t of reviews.slice(0, Math.max(0, reviews.length - 500))) t.expired = true;
-		while (this.tasks.size > 2000) {
-			const candidate = [...this.tasks.values()].find((t) => !ACTIVE.has(t.phase));
-			if (!candidate) break;
-			this.tasks.delete(candidate.id);
-			this.runtime.delete(candidate.id);
-		}
-		this.records.saveTasks([...this.tasks.values()]);
-		this.notify();
+		if (this.saveScheduled) return;
+		this.saveScheduled = true;
+		// A page disconnect can change hundreds of tasks; save and notify once.
+		queueMicrotask(() => {
+			this.saveScheduled = false;
+			const reviews = [...this.tasks.values()].filter((t) => t.phase === 'review' && !t.expired);
+			for (const t of reviews.slice(0, Math.max(0, reviews.length - 500))) t.expired = true;
+			while (this.tasks.size > 2000) {
+				const candidate = [...this.tasks.values()].find((t) => !ACTIVE.has(t.phase));
+				if (!candidate) break;
+				this.tasks.delete(candidate.id);
+				this.runtime.delete(candidate.id);
+			}
+			this.records.saveTasks([...this.tasks.values()]);
+			this.notify();
+		});
 	}
 
 	private phase(task: QuestionTask, phase: QuestionPhase, message: string) {
@@ -152,15 +165,31 @@ export class QuestionService {
 		const settings = this.configuration.get();
 		if (!settings.enabled) return { taskId: '', strategy: settings.strategy, enabled: false };
 		const input = normalizeQuestion(value);
+		const fingerprint = questionFingerprint(input);
+		const config = invocation(settings);
+		const adjudication = invocation(settings, 'adjudication');
 		for (const previous of this.tasks.values()) {
 			if (
 				previous.pageConnected &&
 				input.pageId &&
 				previous.input.pageId === input.pageId &&
-				questionFingerprint(previous.input) === questionFingerprint(input)
+				(input.rootId
+					? previous.input.rootId === input.rootId
+					: !previous.input.rootId && questionFingerprint(previous.input) === fingerprint)
 			) {
+				const previousRuntime = this.runtime.get(previous.id);
+				if (
+					questionFingerprint(previous.input) === fingerprint &&
+					previousRuntime &&
+					JSON.stringify([previousRuntime.config, previousRuntime.adjudication]) ===
+						JSON.stringify([config, adjudication]) &&
+					!['error', 'cancelled', 'review'].includes(previous.phase)
+				)
+					return { taskId: previous.id, strategy: previous.strategy, enabled: true };
 				previous.pageConnected = false;
+				previous.expired = true;
 				this.runtime.get(previous.id)?.controller.abort();
+				this.runtime.delete(previous.id);
 				if (ACTIVE.has(previous.phase)) {
 					previous.submissionBlocked = true;
 					this.phase(previous, 'cancelled', '同题已开始新一轮查询，此记录不再回填页面');
@@ -181,17 +210,22 @@ export class QuestionService {
 			timeline: [],
 			callIds: []
 		};
-		const config = invocation(settings);
 		const runtime: Runtime = {
 			controller: new AbortController(),
 			settings,
 			config,
 			admitted: !this.paused,
-			adjudication: invocation(settings, 'adjudication')
+			adjudication
 		};
 		this.tasks.set(task.id, task);
 		this.runtime.set(task.id, runtime);
 		this.phase(task, 'queued', this.paused ? '任务已排队，等待恢复' : '已接收题目');
+		const inputError = questionInputError(input);
+		if (inputError) {
+			task.error = inputError;
+			this.phase(task, 'error', inputError);
+			return { taskId: task.id, strategy: settings.strategy, enabled: true };
+		}
 		const cached = this.cached(task, runtime);
 		if (cached) this.accept(task, cached.answer, 'cache', cached.manual ? '复用人工确认答案' : '复用当前配置下的答案');
 		else if (settings.strategy !== 'bank-first') this.startModel(task, runtime);
@@ -235,6 +269,7 @@ export class QuestionService {
 		const task = this.get(id);
 		const runtime = this.runtime.get(id);
 		if (!runtime) return Promise.resolve(this.decision(id));
+		if (questionInputError(task.input)) return Promise.resolve(this.decision(id));
 		if (task.answer && task.phase !== 'error') return Promise.resolve(this.decision(id));
 		if (!runtime.decision) {
 			runtime.banks = banks;
@@ -247,7 +282,7 @@ export class QuestionService {
 				} else {
 					task.error = (error as Error).message;
 					task.submissionBlocked = true;
-					this.phase(task, task.input.assessment ? 'review' : 'error', task.error);
+					this.phase(task, 'error', task.error);
 				}
 				return this.decision(id);
 			});
@@ -317,6 +352,21 @@ export class QuestionService {
 		};
 	}
 
+	decisions(ids: string[]): QuestionDecision[] {
+		if (!Array.isArray(ids) || ids.length > 500 || ids.some((id) => typeof id !== 'string'))
+			throw new Error('题目状态请求无效');
+		return ids.map((id) =>
+			this.tasks.has(id)
+				? this.decision(id)
+				: {
+						taskId: id,
+						status: 'error',
+						submissionBlocked: true,
+						error: '题目记录已过期'
+				  }
+		);
+	}
+
 	status(id: string, phase: QuestionPhase, error?: string) {
 		const task = this.get(id);
 		if (!task.pageConnected || task.phase === 'cancelled') return;
@@ -342,7 +392,9 @@ export class QuestionService {
 		for (const task of this.tasks.values()) {
 			if (task.input.pageId !== pageId || !task.pageConnected) continue;
 			task.pageConnected = false;
+			task.expired = true;
 			this.runtime.get(task.id)?.controller.abort();
+			this.runtime.delete(task.id);
 			if (ACTIVE.has(task.phase)) {
 				task.submissionBlocked = true;
 				this.phase(task, 'cancelled', '原页面已关闭或切换');
@@ -357,7 +409,7 @@ export class QuestionService {
 			if (task.phase === 'review' && Date.now() - task.updatedAt > 3600000) task.expired = true;
 		}
 		const active = tasks.filter((t) => ACTIVE.has(t.phase)).length;
-		const pending = tasks.filter((t) => t.phase === 'review' && !t.expired).length;
+		const pending = tasks.filter((t) => t.phase === 'review' && !t.expired && t.pageConnected).length;
 		const filtered = tasks
 			.filter(
 				(t) =>
@@ -421,6 +473,7 @@ export class QuestionService {
 			return;
 		}
 		if (!task.pageConnected) throw new Error('原页面已断开，请在课程页面重新启动搜题');
+		if (questionInputError(task.input)) throw new Error('题目采集失败，请在课程页面重新搜题以读取最新题图');
 		if (ACTIVE.has(task.phase)) throw new Error('任务正在运行');
 		previous?.controller.abort();
 		const settings = this.configuration.get();

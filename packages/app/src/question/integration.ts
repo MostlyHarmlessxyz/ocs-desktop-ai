@@ -101,6 +101,9 @@ export function registerQuestionRoutes(server: express.Express) {
 					case 'decision':
 						result = service().decision(String(input.taskId));
 						break;
+					case 'decisions':
+						result = service().decisions(input.taskIds);
+						break;
 					case 'status':
 						service().status(String(input.taskId), input.phase as QuestionPhase, input.error);
 						result = { ok: true };

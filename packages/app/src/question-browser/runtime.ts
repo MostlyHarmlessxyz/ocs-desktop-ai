@@ -32,8 +32,9 @@ interface Session {
 	decision?: QuestionDecision;
 	root?: HTMLElement;
 	apply?: () => Promise<any>;
+	applying?: Promise<any>;
 	tracked?: { result: WorkResult; worker: WorkerLike; index: number; results: WorkResult[] };
-	watching?: boolean;
+	watchUntil?: number;
 	superseded?: boolean;
 	lastApplied?: string;
 	verify?: () => boolean;
@@ -41,6 +42,8 @@ interface Session {
 
 export function createQuestionRuntime() {
 	const sessions = new Map<string, Session>();
+	const watched = new Map<string, Session>();
+	let watching = false;
 	const rootSessions = new WeakMap<HTMLElement, Session>();
 	const retryRoots = new WeakSet<HTMLElement>();
 	const continuations = new WeakMap<WorkerLike, () => Promise<unknown>>();
@@ -51,6 +54,8 @@ export function createQuestionRuntime() {
 		'pagehide',
 		() => {
 			disposed = true;
+			watched.clear();
+			sessions.clear();
 		},
 		{ once: true }
 	);
@@ -377,6 +382,14 @@ export function createQuestionRuntime() {
 			/font-cxsecret/i.test(root.ownerDocument.defaultView?.getComputedStyle(root).fontFamily || '')
 		);
 	}
+	function mark(element: HTMLElement) {
+		let id = element.getAttribute('data-ocs-ai-capture');
+		if (!id || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) {
+			id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+			element.setAttribute('data-ocs-ai-capture', id);
+		}
+		return id;
+	}
 	async function visualQuestion(env: any, context?: Context): Promise<QuestionInput | undefined> {
 		const root =
 			context?.root ||
@@ -389,6 +402,7 @@ export function createQuestionRuntime() {
 			options: [],
 			type: String(context?.type || env.type || 'unknown'),
 			contentMode: 'visual',
+			rootId: mark(root),
 			sourceUrl: location.href,
 			assessment: assessment(),
 			formalExam: formalExam(),
@@ -398,14 +412,6 @@ export function createQuestionRuntime() {
 		};
 		try {
 			if (!context?.elements?.title?.length) throw new Error('无法精确定位原始题干，请重新打开题目页面');
-			const mark = (element: HTMLElement) => {
-				let id = element.getAttribute('data-ocs-ai-capture');
-				if (!id || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) {
-					id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-					element.setAttribute('data-ocs-ai-capture', id);
-				}
-				return id;
-			};
 			const isControl = (element: HTMLElement) => {
 				const hint = String(element.className) + ' ' + element.id;
 				return (
@@ -461,6 +467,12 @@ export function createQuestionRuntime() {
 		return input;
 	}
 	async function begin(env: any, context?: Context): Promise<Session> {
+		for (const [id, previous] of sessions) {
+			if (previous.superseded || (previous.root && !rootActive(previous.root))) {
+				sessions.delete(id);
+				watched.delete(id);
+			}
+		}
 		const visual = await visualQuestion(env, context);
 		if (visual) {
 			for (const previous of sessions.values()) if (previous.root === context?.root) previous.superseded = true;
@@ -499,6 +511,7 @@ export function createQuestionRuntime() {
 						.map((value) => value.trim())
 						.filter(Boolean),
 			type: String(env.type || 'unknown'),
+			rootId: context?.root ? mark(context.root) : undefined,
 			sourceUrl: location.href,
 			assessment: assessment(),
 			formalExam: formalExam(),
@@ -511,16 +524,18 @@ export function createQuestionRuntime() {
 		}
 		for (const previous of sessions.values()) {
 			if (
-				previous.input.question === input.question &&
-				previous.input.type === input.type &&
-				JSON.stringify(previous.input.options) === JSON.stringify(input.options)
+				context?.root
+					? previous.root === context.root
+					: previous.input.question === input.question &&
+					  previous.input.type === input.type &&
+					  JSON.stringify(previous.input.options) === JSON.stringify(input.options)
 			)
 				previous.superseded = true;
 		}
 		const created = await send('begin', input);
 		// Image bytes are owned by the main-process task after begin; do not retain a duplicate per page attempt.
 		input.images = undefined;
-		const session: Session = { ...created, input };
+		const session: Session = { ...created, input, root: context?.root };
 		if (session.taskId) sessions.set(session.taskId, session);
 		return session;
 	}
@@ -714,34 +729,55 @@ export function createQuestionRuntime() {
 		}
 	}
 	function watchManual(session: Session) {
-		if (session.watching) return;
-		session.watching = true;
+		if (session.input.imageErrors?.length) return;
+		session.watchUntil ||= Date.now() + 60 * 60 * 1000;
+		watched.set(session.taskId, session);
+		if (watching) return;
+		watching = true;
 		(async () => {
-			const deadline = Date.now() + 60 * 60 * 1000;
-			while (connected() && !session.superseded && session.root?.isConnected && Date.now() < deadline) {
-				await sleep(1500);
-				try {
-					const decision: QuestionDecision = await send('decision', { taskId: session.taskId });
-					session.decision = decision;
-					if (
-						decision.status !== 'manual' ||
-						!decision.answer?.length ||
-						!session.apply ||
-						JSON.stringify(decision.answer) === session.lastApplied
-					)
-						continue;
-					const result = await session.apply();
-					const tracked = session.tracked;
-					if (tracked) {
-						tracked.result.result = result;
-						tracked.result.error = result.error;
-						tracked.result.resolved = true;
-						await tracked.worker.opts.onResultsUpdate?.(tracked.result, tracked.index, tracked.results);
-						if (tracked.results.every(resultFinished)) await continuations.get(tracked.worker)?.();
+			try {
+				while (connected() && watched.size) {
+					await sleep(1500);
+					for (const [id, entry] of watched) {
+						if (!activeSession(entry) || !entry.root || !rootActive(entry.root) || Date.now() >= entry.watchUntil!) {
+							watched.delete(id);
+							if (sessions.get(id) === entry) sessions.delete(id);
+						}
 					}
-				} catch {
-					return;
+					const ids = [...watched.keys()];
+					try {
+						for (let offset = 0; offset < ids.length; offset += 500) {
+							const decisions: QuestionDecision[] = await send('decisions', {
+								taskIds: ids.slice(offset, offset + 500)
+							});
+							for (const decision of decisions) {
+								const entry = watched.get(decision.taskId);
+								if (!entry || !activeSession(entry)) continue;
+								entry.decision = decision;
+								if (
+									!['manual', 'agree'].includes(decision.status) ||
+									!decision.answer?.length ||
+									!entry.apply ||
+									JSON.stringify(decision.answer) === entry.lastApplied
+								)
+									continue;
+								const result = await entry.apply();
+								const tracked = entry.tracked;
+								if (tracked) {
+									tracked.result.result = result;
+									tracked.result.error = result.error;
+									tracked.result.resolved = true;
+									await tracked.worker.opts.onResultsUpdate?.(tracked.result, tracked.index, tracked.results);
+									if (tracked.results.every(resultFinished)) await continuations.get(tracked.worker)?.();
+								}
+							}
+						}
+					} catch {
+						await sleep(3000);
+					}
 				}
+			} finally {
+				watching = false;
 			}
 		})().catch(() => {});
 	}
@@ -758,7 +794,12 @@ export function createQuestionRuntime() {
 			['single', 'multiple', 'judgement', 'completion', 'fill-blank'].map((type) => [
 				type,
 				async (_infos: any[], options: ElementLike[], handler: any) => {
-					session.apply = () => apply(session, ctx, type, options, handler, toText);
+					session.apply = () => {
+						session.applying ||= apply(session, ctx, type, options, handler, toText).finally(() => {
+							session.applying = undefined;
+						});
+						return session.applying;
+					};
 					watchManual(session);
 					if (session.decision?.status === 'pending') return { finish: false };
 					return session.apply();

@@ -77,6 +77,16 @@ function page(html = '', decisions: any = {}, url = 'https://mooc1.chaoxing.com/
 	window.__ocsQuestionBridge = async (operation: string, data: any) => {
 		calls.push({ operation, data: JSON.parse(JSON.stringify(data)) });
 		if (operation === 'begin') return { taskId: `task-${++sequence}`, enabled: true, strategy: 'consensus' };
+		if (operation === 'decisions')
+			return data.taskIds.map(
+				(taskId: string) =>
+					decisions[taskId] || {
+						taskId,
+						status: 'agree',
+						answer: ['A'],
+						submissionBlocked: false
+					}
+			);
 		if (operation === 'complete' || operation === 'decision')
 			return (
 				decisions[data.taskId] || {
@@ -414,6 +424,50 @@ describe('OCS 5.2.3 version-specific adapter', () => {
 });
 
 describe('question browser runtime', () => {
+	it('uses one batched watcher per page and stops watching removed question roots', async () => {
+		const fixture = page(
+			Array.from(
+				{ length: 12 },
+				(_v, i) => `<div class="questionLi"><label><input type="radio">${i}</label></div>`
+			).join('')
+		);
+		for (const [index, root] of [...fixture.window.document.querySelectorAll('.questionLi')].entries()) {
+			const session = await fixture.runtime.begin({ title: 'Question ' + index, type: 'single', options: ['A'] });
+			const searchInfos = await fixture.runtime.finish(session, []);
+			await fixture.runtime
+				.resolver({ root, searchInfos })
+				.single(searchInfos, [...root.querySelectorAll('label')], async (_type: string, _text: string, option: any) => {
+					option.querySelector('input').checked = true;
+				});
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1700));
+		const batches = fixture.calls.filter((call) => call.operation === 'decisions');
+		expect(batches).toHaveLength(1);
+		expect(batches[0].data.taskIds).toHaveLength(12);
+		fixture.window.document.body.innerHTML = '';
+		await new Promise((resolve) => setTimeout(resolve, 1700));
+		expect(fixture.calls.filter((call) => call.operation === 'decisions')).toHaveLength(1);
+	});
+	it('serializes overlapping answer application for the same question', async () => {
+		const fixture = page('<div id="root"><label><input type="radio">A</label></div>');
+		const session = await fixture.runtime.begin({ title: 'One question', type: 'single', options: ['A'] });
+		const searchInfos = await fixture.runtime.finish(session, []);
+		const root = fixture.window.document.querySelector('#root');
+		const options = [...root.querySelectorAll('label')];
+		const resolver = fixture.runtime.resolver({ root, searchInfos });
+		let calls = 0;
+		const handler = async () => {
+			calls++;
+			await new Promise((resolve) => setTimeout(resolve, 60));
+			root.querySelector('input').checked = true;
+		};
+		const results = await Promise.all([
+			resolver.single(searchInfos, options, handler),
+			resolver.single(searchInfos, options, handler)
+		]);
+		expect(calls).toBe(1);
+		expect(results.every((result) => result.finish)).toBe(true);
+	});
 	it('recognizes a selected letter badge beside its answer text without clicking it again', async () => {
 		const fixture = page(
 			'<div class="questionLi"><div class="choice"><span class="num_option check_answer">A</span>' +
@@ -1120,6 +1174,9 @@ describe('worker-owned bridge', () => {
 		expect(requests[0].data.pageId).not.toBe('spoofed');
 		expect(requests[0].data.sourceUrl).toBe(url);
 		await expect(callback(source, 'decision', { taskId: 'foreign' })).rejects.toThrow('不属于');
+		await expect(callback(source, 'decisions', { taskIds: ['owned', 'foreign'] })).rejects.toThrow('不属于');
+		await callback(source, 'decisions', { taskIds: ['owned'] });
+		expect(requests.at(-1).data.taskIds).toEqual(['owned']);
 		url = 'https://mooc1.chaoxing.com/work/b';
 		await expect(callback(source, 'decision', { taskId: 'owned' })).rejects.toThrow('已变化');
 		await dispose();

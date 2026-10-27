@@ -150,6 +150,7 @@ export function normalizeQuestion(value: QuestionInput): QuestionInput {
 		sourceUrl,
 		browserUid: String(value.browserUid || '').slice(0, 200),
 		pageId: String(value.pageId || '').slice(0, 200),
+		rootId: typeof value.rootId === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value.rootId) ? value.rootId : undefined,
 		assessment: formalExam || value.assessment === true,
 		formalExam,
 		contentMode: value.contentMode === 'visual' ? 'visual' : 'text',
@@ -157,4 +158,10 @@ export function normalizeQuestion(value: QuestionInput): QuestionInput {
 		images: Array.isArray(value.images) ? value.images.filter((i) => typeof i === 'string') : [],
 		imageErrors: Array.isArray(value.imageErrors) ? value.imageErrors.map(String).map((s) => s.slice(0, 500)) : []
 	};
+}
+
+export function questionInputError(input: QuestionInput): string | undefined {
+	if (input.imageErrors?.length) return '题目图片不完整：' + input.imageErrors.join('；');
+	if (input.contentMode === 'visual' && (!input.images?.length || input.imageLabels?.length !== input.images.length))
+		return '原始字形题图或图片标签缺失，请在课程页面重新搜题';
 }

@@ -50,11 +50,26 @@ function setup(strategy: 'consensus' | 'bank-first' | 'model-only' = 'consensus'
 			} as QuestionCall)
 	);
 	const pool = { run, close: () => {} } as unknown as CodexPool;
-	const service = new QuestionService(config, new QuestionRecords(dir), undefined, pool);
+	const records = new QuestionRecords(dir);
+	const service = new QuestionService(config, records, undefined, pool);
 	services.push(service);
-	return { service, run, config };
+	return { service, run, config, records };
 }
 describe('搜题任务策略与状态', () => {
+	it('一次页面断开合并保存全部排队任务，避免反复序列化完整历史', async () => {
+		const { service, records, run } = setup();
+		const save = vi.spyOn(records, 'saveTasks');
+		await service.control('pause');
+		for (let i = 0; i < 50; i++) service.begin({ ...input, rootId: 'q-' + i });
+		await Promise.resolve();
+		save.mockClear();
+		service.disconnect(input.pageId);
+		await Promise.resolve();
+		expect(save).toHaveBeenCalledOnce();
+		expect(save.mock.calls[0][0]).toHaveLength(50);
+		expect(save.mock.calls[0][0].every((task) => task.phase === 'cancelled' && !task.pageConnected)).toBe(true);
+		expect(run).not.toHaveBeenCalled();
+	});
 	it('重试淘汰旧调用，旧结果不得把新任务置为可填写', async () => {
 		const { service, run } = setup();
 		const releases: Array<(value: QuestionCall) => void> = [];
@@ -113,10 +128,64 @@ describe('搜题任务策略与状态', () => {
 		const { service } = setup('consensus', 'A', '网络断开');
 		const { taskId } = service.begin(input);
 		const result = await service.complete(taskId, bank('B'));
-		expect(result.status).toBe('pending');
+		expect(result.status).toBe('error');
 		expect(result.submissionBlocked).toBe(true);
-		expect(service.list().pending).toBe(1);
+		expect(service.list().pending).toBe(0);
 		expect(() => service.status(taskId, 'submitted')).toThrow();
+	});
+	it('采集失败不调用模型、不进入复核，也不使用缺图数据重试', async () => {
+		const { service, run } = setup();
+		const { taskId } = service.begin({
+			...input,
+			rootId: 'q-one',
+			contentMode: 'visual',
+			images: [],
+			imageErrors: ['截图超时']
+		});
+		expect((await service.complete(taskId)).status).toBe('error');
+		expect(run).not.toHaveBeenCalled();
+		expect(service.list().pending).toBe(0);
+		expect((await service.detail(taskId)).task.callIds).toEqual([]);
+		await expect(service.control('retry', taskId)).rejects.toThrow('重新搜题');
+	});
+	it('同一页面同一题的重复请求复用任务，不同空题图不互相取消', async () => {
+		const { service, run } = setup();
+		const first = service.begin({ ...input, rootId: 'q-one' });
+		expect(service.begin({ ...input, rootId: 'q-one' }).taskId).toBe(first.taskId);
+		await service.complete(first.taskId);
+		expect(run).toHaveBeenCalledTimes(1);
+		const failed = { ...input, contentMode: 'visual' as const, images: [], imageErrors: ['截图超时'] };
+		const a = service.begin({ ...failed, rootId: 'q-two' });
+		service.begin({ ...failed, rootId: 'q-three' });
+		expect((await service.detail(a.taskId)).task.pageConnected).toBe(true);
+	});
+	it('修改调用配置后，同一题不复用正在运行的旧配置任务', async () => {
+		const { service, config } = setup();
+		await service.control('pause');
+		const first = service.begin({ ...input, rootId: 'q-one' });
+		config.save({ ...config.get(), proxyUrl: 'http://127.0.0.1:18080' });
+		const next = service.begin({ ...input, rootId: 'q-one' });
+		expect(next.taskId).not.toBe(first.taskId);
+		expect((await service.detail(first.taskId)).task.phase).toBe('cancelled');
+	});
+	it('断开的待复核任务退出待处理计数，旧截图错误在重启时保留为失败记录', async () => {
+		const { service } = setup();
+		const { taskId } = service.begin(input);
+		await service.complete(taskId);
+		service.status(taskId, 'review');
+		expect(service.list().pending).toBe(1);
+		service.disconnect(input.pageId);
+		expect(service.list().pending).toBe(0);
+		await service.close();
+		const record = JSON.parse(fs.readFileSync(path.join(dir, 'tasks.json'), 'utf8'));
+		record[0].phase = 'review';
+		record[0].expired = false;
+		record[0].input.imageErrors = ['旧截图超时'];
+		fs.writeFileSync(path.join(dir, 'tasks.json'), JSON.stringify(record));
+		const reloaded = new QuestionService(new QuestionConfiguration(), new QuestionRecords(dir));
+		services.push(reloaded);
+		expect(reloaded.list().items[0].phase).toBe('error');
+		expect(reloaded.list().pending).toBe(0);
 	});
 	it('正式考试有答案仍然禁止自动提交', async () => {
 		const { service } = setup();

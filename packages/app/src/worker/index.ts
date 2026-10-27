@@ -566,6 +566,7 @@ export class ScriptWorker implements ScriptWorkerContract {
 					send('screencast-frame', this.uid, data);
 				});
 
+				this.screencastSession = session;
 				await session.send('Page.startScreencast', {
 					format: 'jpeg',
 					quality: params.quality,
@@ -574,9 +575,10 @@ export class ScriptWorker implements ScriptWorkerContract {
 					everyNthFrame: params.everyNthFrame
 				});
 
-				this.screencastSession = session;
 				this.info('[screencast] 实时推流已建立：', page.url());
 			} catch (err) {
+				await this.screencastSession?.detach().catch(() => {});
+				this.screencastSession = undefined;
 				// 建会话/启流失败：首帧截图已先行展示，等待后续 load / 新页面事件驱动重建
 				this.warn('[screencast] 建立实时推流失败（首帧截图仍可用）：', String(err));
 			}

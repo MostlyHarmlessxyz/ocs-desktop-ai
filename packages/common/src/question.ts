@@ -35,6 +35,7 @@ export interface QuestionInput {
 	sourceUrl?: string;
 	browserUid?: string;
 	pageId?: string;
+	rootId?: string;
 	assessment?: boolean;
 	formalExam?: boolean;
 	images?: string[];
@@ -171,4 +172,4 @@ export interface QuestionRemoteMethods {
 	questionControl: (action: 'pause' | 'resume' | 'cancel' | 'retry', id?: string) => Promise<void>;
 	questionResolve: (id: string, answers: string[]) => Promise<QuestionDecision>;
 }
-export const QUESTION_BRIDGE_VERSION = 'ai-9';
+export const QUESTION_BRIDGE_VERSION = 'ai-10';
