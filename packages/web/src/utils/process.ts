@@ -1,6 +1,7 @@
 import { ChildProcess } from 'child_process';
 import { remote } from './remote';
-import { t, store } from '../store';
+import { store } from '../store';
+import { t } from './langs';
 import { LaunchOptions } from 'playwright-core';
 import { reactive, h } from 'vue';
 import type { ScriptWorker, ScreencastPageInfo, ScreencastPagesChangedPayload } from '@ocs-desktop/common/web';
@@ -17,7 +18,8 @@ import {
 	isQuestionScript,
 	QuestionInstallation,
 	questionScriptsForProfile,
-	readQuestionInstallations
+	readQuestionInstallations,
+	writeQuestionInstallations
 } from './script-version';
 import { notifyOcrMissingAfterLaunch } from './ocr';
 import { detectWeakNetwork } from './index';
@@ -149,6 +151,10 @@ export class Process extends EventEmitter {
 	pages: ScreencastPageInfo[] = [];
 	/** 当前推流目标页 URL（worker pages-changed 事件实时更新） */
 	screencastPageUrl: string = '';
+	/** 浏览器实例真实内存占用 MB（worker 定时上报 memory-usage 事件更新，0 = 暂无数据） */
+	memoryUsageMB: number = 0;
+	/** 浏览器实例 CPU 占用率 %（worker 同事件上报，多核并行可超 100%，0 = 暂无数据） */
+	cpuPercent: number = 0;
 	/** 上一帧 Blob URL，用于更新前 revoke 避免内存泄漏 */
 	private _blobUrl: string = '';
 	/** 最近一帧的 base64（用于关闭时最终落盘） */
@@ -195,11 +201,23 @@ export class Process extends EventEmitter {
 	 * 使用 child_process 运行 ocs 命令
 	 */
 	async init(onConsole?: (data: any) => void) {
+		// electron-vite 的 renderer 构建按浏览器环境编译，会把裸写的 process.env 整体替换为空对象 {}，
+		// 导致 worker 子进程丢失 DISPLAY/WAYLAND_DISPLAY/HOME 等全部环境变量，
+		// 其启动的浏览器因无显示服务器立即退出（Playwright 报 "Target page, context or browser has been closed"）。
+		// 注意：esbuild 的 define 会把 globalThis.process 等同于 process 标识符，一行连写的
+		// globalThis.process?.env 会被整体替换为 {}。必须先取出局部变量再访问 env 才能绕开词法匹配
+		// （已实测：拆行写法在构建产物中保留 globalThis.process，一行写法被替换为空对象）。
+		// 渲染进程开启 nodeIntegration，globalThis.process 即真实进程对象；
+		// 纯浏览器环境（导航页）下 globalThis.process 不存在，回退空对象（该环境不会执行 fork）。
+		const realProcess = (globalThis as any).process;
+		const workerEnv = realProcess?.env ?? process.env;
 		this.shell = child_process.fork(
 			await remote.path.call('join', await remote.app.call('getAppPath'), './out/main/script.js'),
 			{
 				stdio: ['ipc'],
-				env: process.env
+				// 双保险：workerEnv 提供全量环境变量（globalThis.process 绕开 esbuild define 替换）；
+				// 再叠加主进程真实显示变量，兜底 Chromium 沙箱清理渲染进程 env（DISPLAY 丢失）的场景
+				env: { ...workerEnv, ...remote.methods.callSync('getDisplayEnv') }
 			}
 		);
 		this.worker = createRemoteScriptWorker(this.shell);
@@ -242,6 +260,33 @@ export class Process extends EventEmitter {
 			'pages-changed': (_uid: string, payload: ScreencastPagesChangedPayload) => {
 				this.pages = payload?.pages || [];
 				this.screencastPageUrl = payload?.current || '';
+			},
+			/** 资源占用上报（worker 每 10s 推送，启动预检测/资源监控浮层使用真实值替代估算） */
+			'memory-usage': (_uid: string, payload: { mb: number; cpuPercent: number }) => {
+				if (payload && typeof payload.mb === 'number' && payload.mb > 0) {
+					this.memoryUsageMB = payload.mb;
+					this.cpuPercent = typeof payload.cpuPercent === 'number' ? payload.cpuPercent : 0;
+				}
+			},
+			/** 脚本管理器拓展验证失败（两轮检测均无 SW）：浏览器可用但脚本功能缺失，提示用户 */
+			'extension-verify-failed': () => {
+				notify(
+					'脚本管理器未加载',
+					`${this.browser.name}：未检测到脚本管理器拓展运行，浏览器已启动但脚本功能不可用。可尝试重启浏览器，或前往「应用中心」重新安装脚本管理器。`,
+					'ext-verify-failed-' + this.uid,
+					{ duration: 60 * 1000, copy: true, type: 'warning' }
+				);
+			},
+			/** 扩展 SW 存在但未匹配脚本管理器（ID 推导不一致，降级放行并提示） */
+			'extension-verify-degraded': (_uid: string, urls: string[]) => {
+				notify(
+					'脚本管理器状态存疑',
+					`${this.browser.name}：检测到扩展运行，但未能确认脚本管理器已加载，脚本功能可能失效。${(urls || []).join(
+						'、'
+					)}`,
+					'ext-verify-degraded-' + this.uid,
+					{ duration: 60 * 1000, copy: true, type: 'warning' }
+				);
 			},
 			/** 网页下载完成（worker 监听下载目录实时回传） */
 			'file-downloaded': (_uid: string, file: { filename: string; path: string }) => {
@@ -369,6 +414,10 @@ export class Process extends EventEmitter {
 
 			// 弱网探测（3s）：弱网模式下跳过脚本版本远程检查，已安装脚本视为最新，加速启动
 			const weakNetwork = await detectWeakNetwork();
+			// 脚本按浏览器 profile 安装：新建/清缓存后的 profile 无标记文件，
+			// 此时不能凭全局 lastInstalledVersion 跳过安装（拓展内实际并无脚本）
+			const scriptMarkerPath = await remote.path.call('join', this.browser.cachePath, '.ocs-scripts-installed.json');
+			const profileInitialized = await remote.fs.call('existsSync', scriptMarkerPath);
 			Status.loading(weakNetwork ? '检测到弱网环境，跳过脚本更新检查...' : '正在检查脚本更新...');
 			const installationFile = await remote.path.call('join', this.browser.cachePath, '.ocs-ai-userscripts.json');
 			let installations: Record<string, QuestionInstallation> = {};
@@ -377,8 +426,21 @@ export class Process extends EventEmitter {
 			} catch {
 				/* New profiles have no successful installations yet. */
 			}
+			// 系统同步会删除软件列表中移除的脚本；同步清除其安装记录，重新添加时才能再次安装。
+			const scriptUrls = new Set(store.render.scripts.map((script) => script.url));
+			let installationsPruned = false;
+			for (const url of Object.keys(installations)) {
+				if (!scriptUrls.has(url)) {
+					delete installations[url];
+					installationsPruned = true;
+				}
+			}
+			if (installationsPruned) await writeQuestionInstallations(installationFile, installations);
 			const candidates = questionScriptsForProfile(enabledUserScripts, installations);
-			const checkedScripts = await filterScriptsNeedingInstall(candidates, { skipRemoteCheck: weakNetwork });
+			const checkedScripts = await filterScriptsNeedingInstall(candidates, {
+				skipRemoteCheck: weakNetwork,
+				profileInitialized
+			});
 			const scriptsToInstall = checkedScripts.map((item) => ({
 				...item,
 				script: enabledUserScripts.find((script) => script.id === item.script.id) || item.script
@@ -394,6 +456,15 @@ export class Process extends EventEmitter {
 			const urlToItem = new Map<string, ScriptToInstall>();
 
 			// 本地脚本：直接通过本地服务器代理（拓展只能拦截 http/https）
+			// 脚本管理器（ScriptCat 1.5+/Tampermonkey 5.5+）仅拦截「路径以 .user.js 结尾」的 URL，
+			// 查询参数形态不触发安装页，因此把文件名编入路径段（真实文件仍由 ?path= 指定）
+			const buildUserscriptUrl = (localPath: string) => {
+				const base = (localPath.split(/[\\/]/).pop() || 'script').replace(/[?#].*$/, '');
+				const name = base.toLowerCase().endsWith('.user.js') ? base : `${base}.user.js`;
+				return `http://localhost:${port}/api/local-userscript/${encodeURIComponent(name)}?path=${encodeURIComponent(
+					localPath
+				)}`;
+			};
 			const remoteItems: { item: ScriptToInstall; remoteUrl: string }[] = [];
 			for (const item of scriptsToInstall) {
 				const script = item.script;
@@ -406,7 +477,7 @@ export class Process extends EventEmitter {
 					});
 					item.bridgeVersion = prepared.bridgeVersion;
 					item.latestVersion = prepared.upstreamVersion || item.latestVersion;
-					const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(prepared.path)}`;
+					const installUrl = buildUserscriptUrl(prepared.path);
 					userscripts.push(installUrl);
 					urlToItem.set(installUrl, item);
 				} else {
@@ -433,9 +504,7 @@ export class Process extends EventEmitter {
 							});
 							item.bridgeVersion = prepared.bridgeVersion;
 							item.latestVersion = prepared.upstreamVersion || item.latestVersion;
-							const installUrl = `http://localhost:${port}/api/local-userscript?path=${encodeURIComponent(
-								prepared.path
-							)}`;
+							const installUrl = buildUserscriptUrl(prepared.path);
 							userscripts.push(installUrl);
 							urlToItem.set(installUrl, item);
 						} catch (error) {
@@ -460,8 +529,9 @@ export class Process extends EventEmitter {
 			}
 
 			// 接收 worker 回传的安装结果，按成功情况更新 lastInstalledVersion
-			this.once('userscript-install-result', (results: InstallResult[]) => {
+			this.once('userscript-install-result', async (results: InstallResult[]) => {
 				let questionInstalled = false;
+				let allSucceeded = scriptsToInstall.length > 0 && (results || []).length === scriptsToInstall.length;
 				for (const r of results || []) {
 					const item = urlToItem.get(r.url);
 					if (!item) continue;
@@ -476,6 +546,7 @@ export class Process extends EventEmitter {
 							questionInstalled = true;
 						}
 					} else {
+						allSucceeded = false;
 						notify(
 							'脚本安装失败',
 							`${item.script.info?.name || r.url} 安装失败：${r.reason || ''}，下次启动将重试`,
@@ -485,11 +556,39 @@ export class Process extends EventEmitter {
 					}
 				}
 				if (questionInstalled) {
-					const temporary = installationFile + '.tmp';
+					await writeQuestionInstallations(installationFile, installations).catch((error) =>
+						console.warn('无法保存浏览器搜题脚本安装状态，下次启动将重新验证', error)
+					);
+				}
+				// 受管脚本清单：记录安装成功的真实脚本名（脚本列表同步的删除资格依据，
+				// 用户手动在浏览器内安装的脚本不在清单内，永不误删）
+				const succeededNames = (results || [])
+					.filter((r) => r.success)
+					.map((r) => urlToItem.get(r.url)?.script.info?.name as string | undefined)
+					.filter((n): n is string => !!n);
+				if (succeededNames.length) {
+					const managedPath = await remote.path.call('join', this.browser.cachePath, '.ocs-scripts-managed.json');
+					try {
+						let existing: string[] = [];
+						if (await remote.fs.call('existsSync', managedPath)) {
+							const data = JSON.parse(String(await remote.fs.call('readFileSync', managedPath, 'utf-8')));
+							existing = Array.isArray(data.names) ? data.names : [];
+						}
+						await remote.fs.call(
+							'writeFileSync',
+							managedPath,
+							JSON.stringify({ names: [...new Set([...existing, ...succeededNames])] })
+						);
+					} catch (e) {
+						console.warn('[process] 写入受管脚本清单失败：', e);
+					}
+				}
+				// 本次请求的脚本全部安装成功 → 写入 profile 安装标记；
+				// 有失败则不写标记，下次启动该 profile 按全新处理重试全部
+				if (allSucceeded) {
 					remote.fs
-						.call('writeFileSync', temporary, JSON.stringify(installations), { mode: 0o600 })
-						.then(() => remote.fs.call('renameSync', temporary, installationFile))
-						.catch((error) => console.warn('无法保存浏览器搜题脚本安装状态，下次启动将重新验证', error));
+						.call('writeFileSync', scriptMarkerPath, JSON.stringify({ time: Date.now(), count: results.length }))
+						.catch(() => {});
 				}
 				Status.clear();
 			});

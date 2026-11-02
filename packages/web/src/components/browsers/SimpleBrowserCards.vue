@@ -49,14 +49,20 @@
 							仅显示运行中
 						</span>
 					</span>
-					<a-button
-						type="outline"
-						size="mini"
-						class="ms-auto"
-						@click="switchToProfessional"
+					<!-- 切换到专业模式：仅图标，文案放入 tooltip；ms-auto 推到行尾 -->
+					<a-tooltip
+						content="专业模式"
+						position="bottom"
 					>
-						<Icon type="view_sidebar">专业模式</Icon>
-					</a-button>
+						<a-button
+							type="outline"
+							size="mini"
+							class="ms-auto"
+							@click="switchToProfessional"
+						>
+							<template #icon><PanelLeftIcon /></template>
+						</a-button>
+					</a-tooltip>
 				</div>
 			</div>
 		</div>
@@ -67,12 +73,6 @@
 				:class="isTile ? 'tile-container' : 'container-md'"
 				:style="isTile ? undefined : { maxWidth: cardGridMaxWidth }"
 			>
-				<!-- 环境检测提示（平铺模式下隐藏，铺满整个区域） -->
-				<EnvironmentAlert
-					v-if="!isTile"
-					class="mb-3"
-				/>
-
 				<BeginnerGuide
 					v-if="!isTile"
 					class="mb-2"
@@ -136,7 +136,8 @@
 											v-if="!showCover(browser.uid)"
 											class="card-name-text"
 										>
-											<Icon type="web">
+											<a-space size="mini"
+												><GlobeIcon />
 												<!-- 重命名状态 -->
 												<template v-if="getBrowserInstance(browser.uid)?.renaming">
 													<a-input
@@ -150,7 +151,7 @@
 												<template v-else>
 													{{ browser.name }}
 												</template>
-											</Icon>
+											</a-space>
 										</div>
 									</template>
 
@@ -172,11 +173,16 @@
 											</div>
 											<div
 												v-else
-												style="font-size: 12px"
-												class="text-center text-secondary"
+												class="d-flex justify-content-center align-items-center"
 											>
-												<IconInfoCircleFill /> 点击 启动 运行浏览器。<br />
-												单击 设置浏览器
+												<div
+													style="font-size: 12px"
+													class="text-left text-secondary"
+												>
+													<PlayCircleIcon /> 启动 运行浏览器 <br />
+													<MouseLeftIcon /> 左键 打开浏览器菜单 <br />
+													<MouseRightIcon /> 右键 快捷菜单
+												</div>
 											</div>
 										</template>
 
@@ -203,17 +209,17 @@
 								class="browser-card add-card"
 								@click="handleAddBrowser"
 							>
-								<Icon
-									type="add_circle_outline"
-									class="add-icon"
-								/>
-								<span class="add-text">新建浏览器</span>
+								<CirclePlusIcon class="add-icon" />
+								<span class="mb-3">新建浏览器</span>
 								<span
 									class="text-secondary"
 									style="font-size: 11px"
 								>
-									<a-tag>数据隔离</a-tag>
-									<a-tag>账号多开</a-tag>
+									特性：
+									<a-space>
+										<a-tag>数据隔离</a-tag>
+										<a-tag>账号多开</a-tag>
+									</a-space>
 								</span>
 							</div>
 						</div>
@@ -226,7 +232,6 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onActivated, watch, nextTick } from 'vue';
-import Icon from '../Icon.vue';
 import Tags from '../Tags.vue';
 import BrowserOperators from './BrowserOperators.vue';
 import { store } from '../../store';
@@ -238,9 +243,16 @@ import { BrowserOptions } from '../../fs/interface';
 import { newBrowserOrInit } from '../../utils/browser';
 import EmptyBrowserCard from '../EmptyBrowserCard.vue';
 import BeginnerGuide from '../BeginnerGuide.vue';
-import EnvironmentAlert from '../EnvironmentAlert.vue';
 import BrowserPreview from './BrowserPreview.vue';
 import { getDisplayNotes } from '../../utils/display-notes';
+import {
+	CirclePlusIcon,
+	PanelLeftIcon,
+	GlobeIcon,
+	MouseLeftIcon,
+	MouseRightIcon,
+	PlayCircleIcon
+} from 'lucide-vue-next';
 
 /** 获取所有浏览器（递归） */
 const allBrowsers = computed(() => {
@@ -429,7 +441,7 @@ onActivated(() => {
 	padding: 2px 0px;
 }
 
-/* 顶部工具行：左侧卡片列数选择 + 紧凑开关，右侧布局切换按钮（与卡片网格同容器，边缘自然对齐） */
+/* 顶部工具行：左侧卡片列数选择 + 紧凑开关，右侧模式切换按钮（与卡片网格同容器，边缘自然对齐） */
 .layout-switch {
 	display: flex;
 	align-items: center;

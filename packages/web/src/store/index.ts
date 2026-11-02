@@ -71,6 +71,8 @@ export type WebStore = {
 			screenshotQuality: 'ultra' | 'high' | 'medium' | 'low';
 			/** 浏览器增强（防休眠/防冻结）：启动时附加防节流参数并注入静音音频豁免，仅对新启动的浏览器生效 */
 			browserEnhancement: boolean;
+			/** CPU/内存启动预检测：启动浏览器前检测剩余内存与 CPU 负载，不足时拦截启动；关闭后忽略警告直接启动 */
+			memoryCheck: boolean;
 			/** 导航页设置 */
 			bookmarkPage: {
 				/** 是否启用自定义导航页（关闭后不更改浏览器新建页面，显示默认空白导航页） */
@@ -105,9 +107,8 @@ export type WebStore = {
 
 	langs: Record<string, string>;
 	state: {
-		/** 是否展示初始化设置  */
-		setup: boolean;
-		/** 是否展示「欢迎使用」引导弹窗（首次进入且需要初始化时显示，点击「开始初始化」后关闭） */
+		/** 是否展示「欢迎使用」介绍弹窗（仅首次进入展示，纯介绍无初始化功能；
+		 *  环境检测与补全已改为启动浏览器时被动自动执行） */
 		welcome: boolean;
 		/** 是否展示「新建浏览器自动初始化」弹窗 */
 		newBrowserSetup: boolean;
@@ -185,6 +186,7 @@ export const DEFAULT_RENDER = {
 			screenshotFramerate: 'low' as const,
 			screenshotQuality: 'medium' as const,
 			browserEnhancement: false,
+			memoryCheck: true,
 			bookmarkPage: {
 				enable: true,
 				enableSearch: true,
@@ -201,8 +203,6 @@ export const DEFAULT_RENDER = {
 	},
 	langs: {},
 	state: {
-		first: true,
-		setup: true,
 		welcome: true,
 		newBrowserSetup: false,
 		mini: false,
@@ -293,16 +293,3 @@ export const files = reactive<File[]>([]);
 
 /** 打开的文件 */
 export const openedFiles = reactive(new Map<string, File>());
-
-export function t(key: string, def?: string, params?: Record<string, any>) {
-	let text = store.render.langs[key];
-	if (!text) {
-		text = def || '';
-	}
-	if (params) {
-		Object.keys(params).forEach((k) => {
-			text = text.replace(new RegExp(`{{${k}}}`, 'g'), params[k]);
-		});
-	}
-	return text;
-}

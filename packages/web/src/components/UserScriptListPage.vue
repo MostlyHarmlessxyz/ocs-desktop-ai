@@ -6,7 +6,7 @@
 			class="mb-3"
 			banner
 			title="使用提示"
-			:html="t('notice_user_scripts_page_usage', '')"
+			:html="t.html('notice_user_scripts_page_usage', '')"
 		/>
 
 		<div class="mb-3 d-flex align-items-center">
@@ -30,7 +30,10 @@
 					</a-button>
 				</a-tooltip>
 				<a-dropdown trigger="hover">
-					<a-button size="mini"> <icon-apps class="me-1" /> 快捷操作 </a-button>
+					<a-button size="mini">
+						<Grid3x3Icon class="me-1" />
+						快捷操作
+					</a-button>
 
 					<template #content>
 						<a-doption
@@ -43,13 +46,13 @@
 							size="mini"
 							@click="enableAll"
 						>
-							全部开启-自动安装
+							全部启用
 						</a-doption>
 						<a-doption
 							size="mini"
 							@click="closeAll"
 						>
-							全部关闭-自动安装
+							全部停用
 						</a-doption>
 					</template>
 				</a-dropdown>
@@ -59,7 +62,7 @@
 					type="primary"
 					@click="state.searchModalVisible = true"
 				>
-					<Icon type="search" /> 搜索脚本
+					<SearchIcon /> 搜索脚本
 				</a-button>
 			</div>
 		</div>
@@ -93,15 +96,15 @@
 									: 'red'
 							"
 						>
-							<icon-refresh
-								v-if="state.script_status[script.id] === 'loading'"
-								spin
-							>
-								正在更新脚本信息...
-							</icon-refresh>
-							<icon-check v-else-if="state.script_status[script.id] === 'done'"> </icon-check>
-							<icon-close v-else-if="state.script_status[script.id] === 'error'"> </icon-close>
-							<icon-exclamation v-else-if="state.script_status[script.id] === 'not_found'"> </icon-exclamation>
+							<template v-if="state.script_status[script.id] === 'loading'">
+								<a-space size="mini">
+									<LoaderCircleIcon class="icon-spin" />
+									正在更新脚本信息...
+								</a-space>
+							</template>
+							<CheckIcon v-else-if="state.script_status[script.id] === 'done'" />
+							<XIcon v-else-if="state.script_status[script.id] === 'error'" />
+							<TriangleAlertIcon v-else-if="state.script_status[script.id] === 'not_found'" />
 						</a-tag>
 						<template #content>
 							<div v-if="state.script_status[script.id] === 'loading'">正在更新脚本信息...</div>
@@ -118,7 +121,7 @@
 						:content-style="{ maxWidth: '400px' }"
 					>
 						<a-tag>
-							<Icon type="info" />
+							<InfoIcon />
 						</a-tag>
 						<template #content>
 							<a-descriptions
@@ -183,7 +186,7 @@
 						@click="showScriptVersionList(script)"
 					>
 						<template v-if="state.versionSelector.currentScriptId === script.id && state.versionSelector.loading">
-							<icon-loading />
+							<LoaderCircleIcon class="icon-spin" />
 						</template>
 						<template v-else>
 							<a-tooltip>
@@ -191,7 +194,7 @@
 									切换脚本版本，启动浏览器后会强制安装此版本<br />
 									如果选择最新版本，那么每次都会同步最新版本
 								</template>
-								<span> <icon-swap /> 版本 </span>
+								<span> <ArrowLeftRightIcon /> 版本 </span>
 							</a-tooltip>
 						</template>
 					</a-button>
@@ -199,35 +202,22 @@
 					<a-tooltip>
 						<template #content>
 							<div style="color: white; font-weight: bold">
-								<template v-if="script.enable"> 关闭脚本自动安装 </template>
-								<template v-else>开启脚本自动安装 </template>
+								<template v-if="script.enable"> 停用脚本 </template>
+								<template v-else>启用脚本 </template>
 							</div>
 
 							<a-divider class="mt-1 mb-1" />
-							<div
-								v-if="script.enable"
-								style="color: white"
-							>
-								如果想禁止脚本运行，请在浏览器拓展中禁止。
-							</div>
-							<div
-								v-else
-								style="color: white"
-							>
-								<div>浏览器启动后会自动安装此脚本，</div>
-								<div>如果此脚本没有在浏览器中安装，则会自动安装，</div>
-								<div>如果已安装则会自动更新以及重新安装</div>
+							<div style="color: white">
+								<div>开关代表脚本的启用状态，与浏览器脚本管理器双向同步：</div>
+								<div>启用时浏览器启动会自动安装/更新并启用此脚本；</div>
+								<div>停用时浏览器启动会同步在脚本管理器中停用此脚本。</div>
 							</div>
 						</template>
 
 						<a-switch
 							v-model="script.enable"
-							style="width: 84px"
 							class="user-script-action"
-						>
-							<template #checked> 自动安装 </template>
-							<template #unchecked> 自动安装 </template>
-						</a-switch>
+						/>
 					</a-tooltip>
 
 					<a-tooltip content="移除脚本">
@@ -235,13 +225,14 @@
 							<template #content>
 								<div>删除后将不能恢复数据！</div>
 								<div>请您记住此脚本名，方便后续查找。</div>
+								<div>下次启动浏览器时，将同步从浏览器脚本管理器中删除此脚本。</div>
 							</template>
 							<a-button
 								size="mini"
 								status="danger"
 								class="user-script-action"
 							>
-								<Icon type="delete" />
+								<Trash2Icon />
 							</a-button>
 						</a-popconfirm>
 					</a-tooltip>
@@ -317,7 +308,7 @@
 											:type="data.alreadyInstalled ? undefined : 'outline'"
 											@click="onAddScript(data.script)"
 										>
-											<Icon type="add" /> {{ data.alreadyInstalled ? '已添加' : '添加' }}
+											<PlusIcon /> {{ data.alreadyInstalled ? '已添加' : '添加' }}
 										</a-button>
 									</template>
 								</ScriptList>
@@ -377,12 +368,12 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { config } from '../config';
-import { t, store, StoreUserScript } from '../store';
+import { store, StoreUserScript } from '../store';
+import { t } from '../utils/langs';
 import { ScriptSearchEngine } from '../types/search';
-import Icon from '../components/Icon.vue';
 import { addScriptFromFile, openScriptSource } from '../utils/user-scripts';
 import { getSpecifiedVersion } from '../utils/script-version';
-import { Message } from '@arco-design/web-vue';
+import { Message, Modal } from '@arco-design/web-vue';
 import ScriptList from '../components/ScriptList.vue';
 import { ScriptSourceType, ScriptVersion } from '../types/user.script';
 import CommonSelector from '../components/CommonSelector.vue';
@@ -390,6 +381,18 @@ import { remote } from '../utils/remote';
 import { Status } from '../utils/statusBar';
 import UsageAlertCollapse from '../components/UsageAlertCollapse.vue';
 import AddNetworkScriptModal from '../components/AddNetworkScriptModal.vue';
+import {
+	Grid3x3Icon,
+	SearchIcon,
+	InfoIcon,
+	LoaderCircleIcon,
+	ArrowLeftRightIcon,
+	Trash2Icon,
+	PlusIcon,
+	CheckIcon,
+	XIcon,
+	TriangleAlertIcon
+} from 'lucide-vue-next';
 
 /** 搜索列表 */
 const engineSearchList = ref<
@@ -434,6 +437,28 @@ const paginatedScripts = computed(() => {
 	return store.render.scripts.slice(start, end);
 });
 
+/**
+ * 瞬时网络错误判定：超时/连接失败/域名解析失败等（静默，仅在 UI 显示错误态）。
+ * 覆盖 axios（ECONNABORTED）与 Chromium 网络栈（ERR_*）及 Node TCP 错误。
+ */
+function isTransientNetworkError(err: unknown): boolean {
+	const text = err instanceof Error ? `${err.name} ${err.message} ${(err as any).code || ''}` : String(err);
+	const features = [
+		'timeout',
+		'ETIMEDOUT',
+		'ECONNABORTED',
+		'ECONNRESET',
+		'ECONNREFUSED',
+		'ENOTFOUND',
+		'ENETUNREACH',
+		'EHOSTUNREACH',
+		'ERR_',
+		'Network Error',
+		'fetch failed'
+	];
+	return new RegExp(features.join('|'), 'i').test(text);
+}
+
 onMounted(() => {
 	updateAllInfo();
 });
@@ -456,7 +481,11 @@ function onSearch(value: string) {
 				isInternetLinkScript: false
 			}));
 		} catch (err) {
-			console.log(err);
+			// 瞬时网络错误（超时/连接失败等）属预期：仅在弹窗内显示条目级错误状态，不输出日志；
+			// 其余异常（接口结构变化/解析错误等）保留警告便于排查
+			if (!isTransientNetworkError(err)) {
+				console.warn(`[scripts] 搜索引擎「${item.engine.name}」请求失败：`, err instanceof Error ? err.message : err);
+			}
 			item.list = [];
 			item.error = true;
 		}
@@ -465,6 +494,21 @@ function onSearch(value: string) {
 }
 
 function onAddScript(script: StoreUserScript) {
+	// 同名检测：官方脚本初始化安装后，防止用户再从第三方平台重复安装同名脚本
+	// （脚本管理器中会出现两份同名脚本，状态同步按名称匹配会冲突）
+	const duplicated = store.render.scripts.some((s) => s.info?.name && s.info.name === script.info?.name);
+	if (duplicated) {
+		Modal.confirm({
+			title: '检测到同名脚本',
+			content: `脚本「${script.info?.name}」已在脚本列表中。重复安装会导致浏览器脚本管理器中出现两份同名脚本，状态同步可能冲突。确定仍要添加吗？`,
+			okText: '仍要添加',
+			cancelText: '取消',
+			onOk: () => {
+				store.render.scripts.push(script);
+			}
+		});
+		return;
+	}
 	store.render.scripts.push(script);
 }
 
@@ -676,7 +720,13 @@ async function updateAllInfo(force = false) {
 						delete state.script_status[script.id];
 					}, 1000);
 				} catch (err) {
-					console.log(err);
+					// 瞬时网络错误静默（条目级错误标记）；其余异常保留警告便于排查
+					if (!isTransientNetworkError(err)) {
+						console.warn(
+							`[scripts] 脚本信息更新失败（${script.info?.name}）：`,
+							err instanceof Error ? err.message : err
+						);
+					}
 					state.script_status[script.id] = 'error';
 				}
 			}

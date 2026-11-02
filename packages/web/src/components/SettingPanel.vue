@@ -33,18 +33,18 @@
 						:key="item.value"
 						:value="item.value"
 					>
-						<Icon
-							:type="item.icon"
-							:size="16"
+						<component
+							:is="item.icon"
+							style="font-size: 16px"
 							class="option-icon"
 						/>
 						{{ item.label }}
 					</a-option>
 					<!-- 选中框自定义渲染（同软件布局） -->
 					<template #label>
-						<Icon
-							:type="currentThemeModeOption.icon"
-							:size="16"
+						<component
+							:is="currentThemeModeOption.icon"
+							style="font-size: 16px"
 							class="option-icon"
 						/>
 						{{ currentThemeModeOption.label }}
@@ -89,24 +89,31 @@
 
 			<Description>
 				<template #label>
-					浏览器增强（实验性）
+					{{ t('setting_browser_enhancement_label', '浏览器增强（实验性）') }}
 					<a-popover>
 						<template #content>
-							<div>开启后浏览器将以"防休眠/防冻结"模式运行，请注意：</div>
-							<div>1. CPU / 内存 / 功耗显著上升，笔记本请注意电量；</div>
-							<div>2. 最多同时运行 4 个浏览器，超出将直接拒绝启动（需先关闭其他浏览器，或关闭浏览器增强功能）；</div>
-							<div>3. 会向所有页面注入一段静音音频以保持页面活跃（隐身实现，不暴露任何函数/全局变量）；</div>
-							<div>4. 仅对之后新启动的浏览器生效，已运行的浏览器需重启后生效；</div>
-							<div>5. ⚠️ 该功能为实验性功能，正在测试中，可能存在未知BUG，请谨慎使用。</div>
+							<div v-html="t.html('setting_browser_enhancement_notice', browserEnhancementNotice)"></div>
 						</template>
-						<Icon
-							class="label-help-icon"
-							type="help_outline"
-						/>
+						<CircleHelpIcon class="label-help-icon" />
 					</a-popover>
 				</template>
-				<a-tooltip content="防休眠/防冻结：浏览器最小化或处于后台时仍可长时间运行 JS。仅对新启动的浏览器生效。">
+				<a-tooltip
+					:content="
+						t(
+							'setting_browser_enhancement_tip',
+							'防休眠/防冻结：浏览器最小化或处于后台时仍可长时间运行 JS。仅对新启动的浏览器生效。'
+						)
+					"
+				>
 					<a-switch v-model="store.render.setting.browser.browserEnhancement" />
+				</a-tooltip>
+			</Description>
+
+			<Description label="CPU/内存检测">
+				<a-tooltip
+					content="启动浏览器前检测剩余内存与 CPU 负载，不足时拦截启动（含批量启动的剩余启动）；关闭后忽略警告直接启动"
+				>
+					<a-switch v-model="store.render.setting.browser.memoryCheck" />
 				</a-tooltip>
 			</Description>
 
@@ -143,10 +150,7 @@
 								<div>控制预览帧率，越高越流畅但占用更多资源。</div>
 								<div>实际帧率随页面内容动态变化（静止画面自动停止推流），实时生效。</div>
 							</template>
-							<Icon
-								class="label-help-icon"
-								type="help_outline"
-							/>
+							<CircleHelpIcon class="label-help-icon" />
 						</a-popover>
 					</template>
 					<a-select
@@ -171,10 +175,7 @@
 									2K），帧尺寸按卡片显示大小自适应（窗口越大画面越清晰），配合背压自动降速，多浏览器同时运行也不会卡死。
 								</div>
 							</template>
-							<Icon
-								class="label-help-icon"
-								type="help_outline"
-							/>
+							<CircleHelpIcon class="label-help-icon" />
 						</a-popover>
 					</template>
 					<a-select
@@ -198,10 +199,7 @@
 							<div>当前浏览器缓存总大小超过此数字时则会弹出警告弹窗。</div>
 							<div>也可在左上角工具中找到 "清除浏览器缓存" 功能</div>
 						</template>
-						<Icon
-							class="label-help-icon"
-							type="help_outline"
-						/>
+						<CircleHelpIcon class="label-help-icon" />
 					</a-popover>
 				</template>
 				<a-input-number
@@ -316,60 +314,30 @@
 				</div>
 			</div>
 		</a-modal>
-
-		<a-card>
-			<template #title>
-				<span class="card-title-icon">📂</span>
-				软件路径
-			</template>
-			<Path
-				label="浏览器缓存"
-				name="userDataDirsFolder"
-				:setting="true"
-				@on-path-change="onUserDataDirsFolderChange"
-			/>
-			<Path
-				label="文件下载"
-				name="downloadFolder"
-			/>
-			<Path
-				label="软件存储"
-				name="user-data-path"
-			/>
-			<Path
-				label="可执行文件"
-				name="exe-path"
-			/>
-		</a-card>
-
-		<div class="mt-4 mb-5">
-			<a-popconfirm
-				content="确认重置您的设置，并重新启动软件吗？"
-				ok-text="确认"
-				cancel-text="取消"
-				@ok="reset"
-			>
-				<a-button status="danger"> 重置设置 </a-button>
-			</a-popconfirm>
-		</div>
 	</div>
 </template>
 
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
 import Description from './Description.vue';
-import Path from './Path.vue';
-import { store, DEFAULT_RENDER } from '../store';
-import { remote } from '../utils/remote';
-import cloneDeep from 'lodash/cloneDeep';
+import { store } from '../store';
+import { t } from '../utils/langs';
 import BrowserPath from './setting/BrowserPath.vue';
 import { changeTheme } from '../utils';
-import Icon from './Icon.vue';
-import { forceClearBrowserCache } from '../utils/browser';
+import { SunMoonIcon, SunIcon, MoonIcon, CircleHelpIcon } from 'lucide-vue-next';
 import { Message } from '@arco-design/web-vue';
-import { Folder } from '../fs/folder';
-import { Browser } from '../fs/browser';
-import { restartAppGuarded } from '../utils/restart';
+
+/**
+ * 浏览器增强说明（「？」弹层）：单一文案段
+ */
+const browserEnhancementNotice = [
+	'开启后浏览器将以"防休眠/防冻结"模式运行，请注意：',
+	'1. CPU / 内存 / 功耗显著上升，笔记本请注意电量；',
+	'2. 最多同时运行 4 个浏览器，超出将直接拒绝启动（需先关闭其他浏览器，或关闭浏览器增强功能）；',
+	'3. 会向所有页面注入一段静音音频以保持页面活跃（隐身实现，不暴露任何函数/全局变量）；',
+	'4. 仅对之后新启动的浏览器生效，已运行的浏览器需重启后生效；',
+	'5. ⚠️ 该功能为实验性功能，正在测试中，可能存在未知BUG，请谨慎使用。'
+].join('<br>');
 
 /** 主题颜色选项（value 对应 theme.less 中 body[theme-color='xxx'] 预设，color 用于选择器色点展示） */
 const themeColors = [
@@ -382,9 +350,9 @@ const themeColors = [
 
 /** 主题样式选项 */
 const themeModeOptions = [
-	{ value: 'auto', label: '自动（跟随系统）', icon: 'brightness_auto' },
-	{ value: 'light', label: '白天', icon: 'light_mode' },
-	{ value: 'dark', label: '夜间', icon: 'dark_mode' }
+	{ value: 'auto', label: '自动（跟随系统）', icon: SunMoonIcon },
+	{ value: 'light', label: '白天', icon: SunIcon },
+	{ value: 'dark', label: '夜间', icon: MoonIcon }
 ] as const;
 
 /** 当前选中项（用于 select #label 插槽渲染图标；兜底取第一项，兼容历史遗留值） */
@@ -394,31 +362,6 @@ const currentThemeModeOption = computed(
 const currentThemeColorOption = computed(
 	() => themeColors.find((o) => o.value === store.render.setting.theme.color) ?? themeColors[0]
 );
-
-/** 重置设置 */
-async function reset() {
-	// 仅重置软件设置为默认值，保留浏览器分身、脚本、路径等用户数据
-	store.render.setting = cloneDeep(DEFAULT_RENDER.setting);
-	store.window = { alwaysOnTop: false, autoLaunch: false, hideToTrayOnClose: false };
-	// 同步保存，确保重置落盘后再重启（不依赖关闭流程的保存时序，避免强制退出时丢失）
-	// 加密受开发者设置「数据加密」开关控制（重置会恢复默认开启）
-	const shouldEncrypt =
-		store.render.setting.dev?.dataEncryption !== false && remote.methods.callSync('isEncryptionAvailable');
-	remote.methods.callSync('saveStore', JSON.stringify(store), shouldEncrypt);
-	// dev 感知重启：pnpm dev 下提示手动重跑终端（见 utils/restart.ts）
-	restartAppGuarded('设置已重置，需重启软件后生效。');
-}
-async function onUserDataDirsFolderChange(previous: string, current: string) {
-	// 更改全部浏览器缓存路径
-	const browsers = Folder.from(store.render.browser.root.uid).findAll((e) => e.type === 'browser') as Browser[];
-	if (browsers.length > 0) {
-		for (const browser of browsers) {
-			browser.cachePath = await remote.path.call('join', current, browser.uid);
-		}
-	}
-
-	await forceClearBrowserCache('检测到浏览器缓存路径，正在清空之前的缓存数据...', previous);
-}
 
 /** 自定义导航页网站管理 */
 const customSiteModalVisible = ref(false);

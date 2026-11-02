@@ -16,7 +16,7 @@
 					@click="openDownloadFolder"
 				>
 					<template #icon>
-						<icon-folder />
+						<FolderIcon />
 					</template>
 					资源文件夹
 				</a-button>
@@ -26,7 +26,7 @@
 					@click="() => (otherExtensionsAddVisible = !otherExtensionsAddVisible)"
 				>
 					<template #icon>
-						<icon-question-circle />
+						<CircleHelpIcon />
 					</template>
 					加载其他拓展
 				</a-button>
@@ -41,7 +41,7 @@
 		>
 			<div
 				class="text-secondary mb-2"
-				v-html="t('notice_resources_page_other_extensions_add', '')"
+				v-html="t.html('notice_resources_page_other_extensions_add', '')"
 			></div>
 		</a-modal>
 
@@ -55,7 +55,9 @@
 				class="mb-2"
 				banner
 				title="使用提示"
-				:html="t('notice_resources_page_usage', '在此安装与管理脚本管理器及各类拓展资源，安装后将自动加载到浏览器中。')"
+				:html="
+					t.html('notice_resources_page_usage', '在此安装与管理脚本管理器及各类拓展资源，安装后将自动加载到浏览器中。')
+				"
 			/>
 
 			<template v-if="resState.loading && !resState.initialized">
@@ -107,10 +109,7 @@
 												v-if="file.icon"
 												:src="file.icon"
 											/>
-											<Icon
-												v-else
-												type="grid_4x4"
-											></Icon>
+											<LayoutGridIcon v-else />
 										</div>
 									</a-radio>
 									<div class="resource-info">
@@ -178,10 +177,7 @@
 									v-if="file.icon"
 									:src="file.icon"
 								/>
-								<Icon
-									v-else
-									type="grid_4x4"
-								></Icon>
+								<LayoutGridIcon v-else />
 							</div>
 							<div class="resource-info">
 								<a
@@ -267,14 +263,15 @@
 import { ref, computed, onMounted, onActivated, onBeforeUnmount, watch } from 'vue';
 import { ResourceFile } from '@ocs-desktop/common/web';
 import { resourceLoader } from '../utils/resources.loader';
-import Icon from './Icon.vue';
 import UsageAlertCollapse from './UsageAlertCollapse.vue';
-import { t, store } from '../store/index';
+import { store } from '../store/index';
+import { t } from '../utils/langs';
 import { Message } from '@arco-design/web-vue';
 import { child_process, electron } from '../utils/node';
 import { remote } from '../utils/remote';
 import { useResources } from '../composables/useResources';
 import { promptRestartAfterOcrInstall } from '../utils/ocr';
+import { FolderIcon, CircleHelpIcon, LayoutGridIcon } from 'lucide-vue-next';
 
 const { ipcRenderer } = electron;
 
@@ -439,11 +436,16 @@ async function download(group_name: string, file: ResourceFile) {
 		ipcRenderer.on('download', listener);
 		try {
 			fileStatus[file.url].downloading = true;
-			await resourceLoader.download(group_name, file);
+			if (group_name === 'extensions') {
+				// 内置拓展随包发版：从 asar 释放（官方源构建期获取 + 逐文件完整性校验），无网络下载
+				await remote.methods.call('installBundledExtension', file.id);
+			} else {
+				await resourceLoader.download(group_name, file);
+			}
 			fileStatus[file.url].downloading = false;
 			fileStatus[file.url].downloadRate = 0;
 
-			if (resourceLoader.isZipFile(file)) {
+			if (group_name !== 'extensions' && resourceLoader.isZipFile(file)) {
 				fileStatus[file.url].unzipping = true;
 				Message.info(`正在解压：${file.name}`);
 				await resourceLoader.unzip(group_name, file);

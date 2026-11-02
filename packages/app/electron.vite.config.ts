@@ -8,7 +8,7 @@ import { transformWithEsbuild } from 'vite';
 
 /**
  * common 源码别名：直接编译 workspace 源码，跳过 common 的 tsc 产物，
- * 保证类型与代码实时一致（与 web/vite.config.ts 的 common/web 别名同策略）。
+ * 保证主进程与 Web 的类型和代码实时一致。
  */
 const commonAlias = [
 	{ find: '@ocs-desktop/common/node', replacement: path.resolve(__dirname, '../common/node.ts') },

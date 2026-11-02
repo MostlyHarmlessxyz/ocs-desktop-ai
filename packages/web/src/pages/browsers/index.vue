@@ -31,18 +31,24 @@
 								size="mini"
 								@click="resetSearch"
 							>
-								<Icon type="restart_alt"> 重置 </Icon>
+								<a-space size="mini"><RotateCcwIcon /> 重置 </a-space>
 							</a-button>
 						</template>
 
-						<!-- 撑开间距，将布局切换按钮推到最右边 -->
+						<!-- 撑开间距，将模式切换按钮推到最右边（保持右侧，避免与文件筛选挤在一起） -->
 						<div class="flex-grow-1"></div>
-						<a-button
-							size="mini"
-							@click="toggleLayoutMode"
+						<!-- 切换到简洁模式：仅图标，文案放入 tooltip -->
+						<a-tooltip
+							content="简洁模式"
+							position="bottom"
 						>
-							<Icon type="grid_view">简洁模式</Icon>
-						</a-button>
+							<a-button
+								size="mini"
+								@click="toggleLayoutMode"
+							>
+								<template #icon><Grid2x2Icon /></template>
+							</a-button>
+						</a-tooltip>
 					</div>
 
 					<!-- 文件操作 -->
@@ -51,8 +57,6 @@
 
 				<!-- 浏览器列表：白色卡片背景 -->
 				<div class="list-card">
-					<EnvironmentAlert class="p-2"> </EnvironmentAlert>
-
 					<template v-if="currentSearchedEntities !== undefined && currentSearchedEntities.length === 0">
 						<a-empty
 							class="p-3"
@@ -85,7 +89,6 @@
 </template>
 
 <script setup lang="ts">
-import Icon from '../../components/Icon.vue';
 import { resetSearch } from '../../utils/entity';
 import FileFilters from '../../components/browsers/FileFilters.vue';
 import FileBreadcrumb from '../../components/browsers/FileBreadcrumb.vue';
@@ -96,8 +99,8 @@ import { computed } from 'vue';
 import NotificationBanner from '../../components/NotificationBanner.vue';
 import { store } from '../../store';
 import RightClickOpenMenuTip from '../../components/RightClickOpenMenuTip.vue';
-import EnvironmentAlert from '../../components/EnvironmentAlert.vue';
 import SimpleBrowserCards from '../../components/browsers/SimpleBrowserCards.vue';
+import { RotateCcwIcon, Grid2x2Icon } from 'lucide-vue-next';
 
 /** 简洁模式：浏览器列表页渲染卡片平铺布局（与专业模式共用同一界面和左侧菜单栏） */
 const isSimpleMode = computed(() => store.render.setting.mode === 'simple');

@@ -11,8 +11,19 @@ import { isLinuxSandboxUnavailable, task } from './src/utils';
 import { handleError } from './src/tasks/error.handler';
 import { startupServer } from './src/tasks/startup.server';
 import { initChrome } from './src/tasks/init.chrome';
+import { ensureExtensionsIntegrity } from './src/extensions/bundled';
 import { initCrypto } from './src/crypto';
 import { integrateAppImageDesktop } from './src/tasks/appimage.desktop';
+
+// 部分启动方式（GearLever/flatpak 等桌面启动器）会把 stdout/stderr 接到已关闭的管道：
+// 任一 console.log 都会触发 EPIPE 异步异常 → 全局错误处理器记日志时再次 console.log → 无限递归，
+// 表现为窗口永不显示、终端无输出、error.log 以数十 MB/s 的速度膨胀直至写满磁盘。
+// 为流挂上 error 监听后 EPIPE 不再升级为 uncaughtException（写不出去的日志直接丢弃）。
+for (const stream of [process.stdout, process.stderr]) {
+	stream?.on?.('error', (err: Error & { code?: string }) => {
+		if (err.code !== 'EPIPE') throw err;
+	});
+}
 
 // 防止软件崩溃以及兼容
 // Windows/macOS 维持原有 no-sandbox 行为不变；Linux 仅在沙箱不可用时才追加（见上）
@@ -28,8 +39,8 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.disableHardwareAcceleration();
 
 if (process.platform === 'linux') {
-	// Linux 透明窗口（无边框 CSS 圆角）需要显式启用 RGBA visuals，
-	// 否则透明区域按不透明渲染，窗口四角仍是实心直角（Electron 官方要求与 disable-gpu 配合使用）
+	// enable-transparent-visuals 现仅服务于启动闪屏 loading 窗口（createLoadingWindow 仍是透明窗口），
+	// 主窗口自 Electron 43 起改用无边框不透明窗口 + roundedCorners 原生圆角，勿删此开关
 	app.commandLine.appendSwitch('enable-transparent-visuals');
 }
 
@@ -51,6 +62,9 @@ function bootstrap() {
 				task('初始化本地设置', async () => {
 					initStore();
 					await task('初始化自动启动', () => autoLaunch());
+					// 内置拓展完整性校验（asar 基准，篡改自动重释放）：依赖 store.paths，
+					// 不阻塞启动（快检毫秒级；首次释放/修复才有秒级耗时，环境补全链路另有兜底安装）
+					task('校验内置拓展', () => ensureExtensionsIntegrity());
 					await task('启动接口服务', () => startupServer());
 				})
 			),

@@ -17,13 +17,13 @@
 				"
 			>
 				<template #icon>
-					<icon-exclamation-circle-fill />
+					<CircleAlertIcon />
 				</template>
 
 				<template #action>
 					<div class="fs-6">
-						<IconDown v-if="collapse" />
-						<IconUp v-else />
+						<ChevronDownIcon v-if="collapse" />
+						<ChevronUpIcon v-else />
 					</div>
 				</template>
 
@@ -52,6 +52,7 @@
 <script lang="ts" setup>
 import { AlertInstance } from '@arco-design/web-vue';
 import { ref } from 'vue';
+import { CircleAlertIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-vue-next';
 
 defineProps<{
 	title: string;

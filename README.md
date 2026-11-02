@@ -1,6 +1,6 @@
 # OCS Desktop AI
 
-基于 OCS Desktop 3.4.0 的独立定制版，增加本地 Codex 搜题、题库答案校验、人工复核和调用记录。
+基于 OCS Desktop 3.8.0 的独立定制版，增加本地 Codex 搜题、题库答案校验、人工复核和调用记录。
 应用使用独立的 `OCS Desktop AI` 数据目录，不读取旧版搜题数据，也不从官方自动更新源覆盖安装。
 
 ## 智能搜题
@@ -61,8 +61,8 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm lint
 pnpm build:linux
-chmod +x releases/ocs-ai-3.4.0-linux-x86_64.AppImage
-./releases/ocs-ai-3.4.0-linux-x86_64.AppImage
+chmod +x releases/ocs-ai-3.8.0-linux-x86_64.AppImage
+./releases/ocs-ai-3.8.0-linux-x86_64.AppImage
 # 不使用 FUSE 的运行方式
 ./releases/current/ocs-desktop-ai
 ```
@@ -117,13 +117,7 @@ pnpm install
 pnpm dev
 ```
 
-仅预览 Web 界面：
-
-```bash
-pnpm --filter @ocs-desktop/web dev
-```
-
-访问 http://localhost:3000 查看 Web 界面。
+开发服务器启动后，可访问 http://localhost:3000 预览 Web 界面。
 
 ## 打包
 

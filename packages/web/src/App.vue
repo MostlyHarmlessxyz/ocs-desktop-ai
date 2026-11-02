@@ -13,29 +13,38 @@
 				</router-view>
 			</div>
 
-			<!-- 全局：浏览器操作面板 -->
-			<a-modal
-				:closable="false"
+			<!-- 全局：浏览器操作面板（抽屉；窗口宽度 <= electron 最小宽度时全屏展示） -->
+			<a-drawer
 				:visible="!!currentBrowser"
-				:width="600"
-				:top="8"
-				:align-center="false"
-				:footer="false"
+				:width="browserPanelWidth"
 				:header="false"
+				:footer="false"
+				placement="right"
+				class="browser-panel-drawer"
 				@cancel="store.render.browser.currentBrowserUid = ''"
 			>
 				<div v-if="currentBrowser">
-					<BrowserPanelOperators :browser="currentBrowser"></BrowserPanelOperators>
+					<!-- 全屏抽屉铺满窗口、无遮罩可点，通过 closable 让操作栏显示关闭按钮 -->
+					<BrowserPanelOperators
+						:browser="currentBrowser"
+						:closable="browserPanelFullscreen"
+						@close="store.render.browser.currentBrowserUid = ''"
+						@add-tag="browserPanelRef?.openAddTagModal()"
+					></BrowserPanelOperators>
 					<a-divider class="mt-2 mb-1" />
-					<div style="max-height: 80vh; overflow: auto">
-						<BrowserPanel :browser="currentBrowser"></BrowserPanel>
+					<div style="max-height: calc(100vh - 90px); overflow: auto">
+						<BrowserPanel
+							ref="browserPanelRef"
+							:browser="currentBrowser"
+						></BrowserPanel>
 					</div>
 				</div>
-			</a-modal>
+			</a-drawer>
 
-			<!-- 全局：欢迎使用引导（首次进入时于初始化弹窗之前展示） -->
+			<!-- 全局：欢迎使用介绍（仅首次进入展示，纯介绍无初始化功能；
+			     环境检测与补全在启动浏览器时自动执行，见 utils/env-bootstrap.ts） -->
 			<a-modal
-				:visible="store.render.state.welcome && store.render.state.setup"
+				:visible="store.render.state.welcome"
 				:footer="false"
 				:closable="false"
 				:mask-closable="false"
@@ -51,12 +60,12 @@
 						{{
 							t(
 								'welcome_desc',
-								'OCS 桌面软件是一款浏览器自动化工具，可以帮助你自动初始化浏览器环境、脚本管理器拓展与用户脚本，支持浏览器多开管理、自动登录、自动安装用户脚本等，让浏览器自动化变得简单高效。'
+								'OCS 桌面软件是一款浏览器自动化工具，支持浏览器多开管理、自动登录、自动安装用户脚本等，让浏览器自动化变得简单高效。'
 							)
 						}}
 					</p>
 					<p class="welcome-tip">
-						{{ t('welcome_init_tip', '使用软件前需要初始化一下环境，点击下方按钮开始！') }}
+						{{ t('welcome_init_tip', '无需任何手动设置，启动浏览器时将自动完成环境检测与补全。') }}
 					</p>
 					<div
 						class="text-center"
@@ -67,33 +76,11 @@
 							size="large"
 							@click="store.render.state.welcome = false"
 						>
-							{{ t('welcome_start_btn', '开始初始化') }}
+							{{ t('welcome_start_btn', '开始使用') }}
 						</a-button>
 					</div>
 				</div>
 			</a-modal>
-
-			<!-- 全局：一键安装 -->
-			<template v-if="!store.render.state.welcome">
-				<Setup
-					v-model:visible="store.render.state.setup"
-					:auto-setup="true"
-					:preset-steps="[
-						'show_desc',
-						'init_env',
-						'new_browser',
-						'init_automationScript',
-						'init_extensions',
-						'init_script',
-						'update_env'
-					]"
-					@finish="
-						() => {
-							store.render.state.setup = false;
-						}
-					"
-				></Setup>
-			</template>
 
 			<!-- 全局：新建浏览器自动初始化（仅打开时挂载，避免启动即运行初始化流程并永久挂起） -->
 			<Setup
@@ -102,7 +89,7 @@
 				auto-setup
 				title="新建浏览器"
 				confirm-text="开始初始化"
-				:preset-steps="['new_browser', 'init_automationScript']"
+				:preset-steps="['new_browser']"
 				@finish="
 					() => {
 						store.render.state.newBrowserSetup = false;
@@ -116,13 +103,17 @@
 			<div class="status-bar-container">
 				<StatusBar />
 			</div>
+
+			<!-- 资源监控浮层：固定右下角置底（状态栏位于其上方），仅有浏览器运行时渲染 -->
+			<ResourceMonitor />
 		</div>
 	</a-config-provider>
 </template>
 
 <script setup lang="ts">
-import { watch, onMounted, onUnmounted } from 'vue';
-import { store, t } from './store';
+import { watch, onMounted, onUnmounted, ref, computed } from 'vue';
+import { store } from './store';
+import { t } from './utils/langs';
 import { remote } from './utils/remote';
 import { root } from './fs/folder';
 import { electron } from './utils/node';
@@ -145,6 +136,7 @@ import zhCN from '@arco-design/web-vue/es/locale/lang/zh-cn';
 import debounce from 'lodash/debounce';
 import Title from './components/Title.vue';
 import StatusBar from './components/StatusBar.vue';
+import ResourceMonitor from './components/ResourceMonitor.vue';
 import BrowserPanel from './components/browsers/BrowserPanel.vue';
 import BrowserPanelOperators from './components/BrowserPanelOperators.vue';
 import Setup from './components/Setup.vue';
@@ -200,11 +192,6 @@ onMounted(async () => {
 	changeTheme().catch(console.error);
 	initThemeSystemListener();
 
-	/** Linux 透明圆角窗口：最大化时去除圆角（直角铺满屏幕） */
-	ipcRenderer.on('window-maximize-change', (_e, maximized: boolean) => {
-		document.documentElement.classList.toggle('window-maximized', maximized);
-	});
-
 	/** 监听屏幕变化 */
 	onResize();
 	window.addEventListener('resize', onResize);
@@ -212,8 +199,8 @@ onMounted(async () => {
 	/** 获取远程语言 */
 	fetchRemoteLangs().catch(console.error);
 
-	// 首次初始化不显示通知。
-	if (!store.render.state.setup) {
+	// 首次进入（欢迎弹窗展示期间）不显示通知。
+	if (!store.render.state.welcome) {
 		/** 获取最新远程通知 */
 		fetchRemoteNotify(false).catch(console.error);
 	}
@@ -370,7 +357,23 @@ onUnmounted(() => {
 });
 
 /** 屏幕响应式检测 */
+/** electron 主窗口最小宽度（packages/app/src/window.ts minWidth），需与其保持一致 */
+const ELECTRON_MIN_WIDTH = 700;
+
+/** 当前视口宽度，用于浏览器面板抽屉的全屏切换 */
+const windowWidth = ref(document.documentElement.clientWidth);
+
+/** 浏览器面板是否全屏：视口 <= electron 最小宽度时全屏展示 */
+const browserPanelFullscreen = computed(() => windowWidth.value <= ELECTRON_MIN_WIDTH);
+
+/** 浏览器面板抽屉宽度：全屏时铺满，否则固定 600px */
+const browserPanelWidth = computed(() => (browserPanelFullscreen.value ? '100%' : 600));
+
+/** 浏览器面板引用：转发操作栏的「添加标签」动作到面板内 Tags 组件的弹窗 */
+const browserPanelRef = ref<InstanceType<typeof BrowserPanel>>();
+
 function onResize() {
+	windowWidth.value = document.documentElement.clientWidth;
 	const isInMobile = document.documentElement.clientWidth < 1200;
 	store.render.state.mini = isInMobile;
 	store.render.state.responsive = isInMobile ? 'mini' : 'small';
@@ -387,37 +390,11 @@ function onResize() {
 @import '@/assets/css/bootstrap.min.css';
 @import '@/assets/css/common.css';
 
-/* Linux 无边框透明窗口：系统不提供原生圆角（Win11/macOS 由系统绘制），用 CSS 圆角 + 细描边模拟。
-   注意两个 CSS 传播陷阱，圆角必须设在 #app 而非 body/html：
-   1. body/html 的背景会传播到整个画布（含圆角之外的区域），四角被画布背景填满；
-   2. html 的 overflow 为 visible 时，body 的 overflow 同样会传播到视口，body 自身不建立裁剪，
-      border-radius 形同虚设。#app 是普通元素，无传播规则，圆角裁剪可靠生效 */
-body.platform-linux {
-	/* 覆盖 bootstrap 与 theme.less 中 body 的背景色，防止传播到画布 */
-	background-color: transparent !important;
-}
-body.platform-linux #app {
-	border-radius: 12px;
-	overflow: hidden;
-	background-color: #ffffff;
-	/* 用内阴影模拟描边：border 会占用布局空间导致内容与窗口边缘错位 */
-	box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
-}
-body.platform-linux[arco-theme='dark'] #app {
-	background-color: #2c2c2c;
-	box-shadow: inset 0 0 0 1px #4b4848;
-}
-/* 最大化时去除圆角与描边，直角铺满屏幕 */
-html.window-maximized body.platform-linux #app {
-	border-radius: 0;
-	box-shadow: none;
-}
-
-/* 全局状态栏：固定右下角，宽度自适应内容，向左扩展不遮挡右侧边缘 */
+/* 全局状态栏：固定右下角（资源监控浮层之上），宽度自适应内容，向左扩展不遮挡右侧边缘 */
 .status-bar-container {
 	position: fixed;
 	right: 12px;
-	bottom: 12px;
+	bottom: 48px;
 	z-index: 3000;
 	display: flex;
 	justify-content: flex-end;
@@ -465,6 +442,12 @@ html.window-maximized body.platform-linux #app {
 	z-index: 100;
 	top: 0;
 	left: 0;
+}
+
+/* 浏览器面板抽屉：内容区已自带滚动（max-height + overflow:auto），
+   body 隐藏溢出避免出现内外两条重复滚动条 */
+.browser-panel-drawer .arco-drawer-body {
+	overflow: hidden;
 }
 
 /** 浏览器编辑抽屉导航栏样式 */

@@ -15,6 +15,7 @@ import { updateApp, updater } from './updater';
 import { AutomationScripts } from '../scripts';
 import { getBrowserMajorVersion, getExtensionPaths } from '../utils/browser';
 import { installBuiltinChrome } from './init.chrome';
+import { ensureExtensionsIntegrity, installBundledExtension, getBundledExtensions } from '../extensions/bundled';
 import type { AppStore, RawAutomationScript, RemoteMethods } from '@ocs-desktop/common';
 import {
 	encryptRenderString,
@@ -117,7 +118,10 @@ let win: BrowserWindow | undefined;
 const methods: RemoteMethods = {
 	...questionMethods,
 	autoLaunch,
-	get: (url: string, config?: AxiosRequestConfig<any> | undefined) => axios.get(url, config).then((res) => res.data),
+	// 默认 15s 超时（可经 config 覆盖）：无超时时 TCP 连接挂起要等 OS 级超时（20s+），
+	// 脚本搜索/信息查询等 UI 链路需要更快失败以进入降级分支
+	get: (url: string, config?: AxiosRequestConfig<any> | undefined) =>
+		axios.get(url, { timeout: 15 * 1000, ...config }).then((res) => res.data),
 	getWithStatus: (url: string, config?: AxiosRequestConfig<any> | undefined) =>
 		axios.get(url, { ...config, validateStatus: () => true }).then((res) => ({ status: res.status, data: res.data })),
 	download: (channel: string, url: string, dest: string) => {
@@ -130,6 +134,10 @@ const methods: RemoteMethods = {
 	getValidBrowsers: getValidBrowsers,
 	getBrowserMajorVersion: getBrowserMajorVersion,
 	getExtensionPaths: getExtensionPaths,
+	// 内置拓展（构建期打入 asar）：完整性校验/按需释放/清单查询
+	ensureBuiltinExtensionsIntegrity: ensureExtensionsIntegrity,
+	installBundledExtension: installBundledExtension,
+	getBundledExtensions: getBundledExtensions,
 	/**
 	 * 下载并安装内置浏览器（供前端「环境修复」复用多源下载，不重启应用）。
 	 * 进度通过 webContents.send('builtin-chrome-install-progress', progress) 推送。
@@ -192,6 +200,19 @@ const methods: RemoteMethods = {
 	 * 非 Linux 平台返回 undefined（该 API 仅 Linux 有意义）。
 	 */
 	getStorageBackend: () => (process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined),
+	getDisplayEnv: () => {
+		// Linux 打包版：Chromium 沙箱会清理渲染进程环境变量（DISPLAY 丢失），
+		// worker 由渲染进程 fork 继承残缺 env，内置 Chrome 报 "Missing X server"。
+		// 从主进程返回真实显示变量，供 fork worker 时合并（非 Linux 为空对象，合并无副作用）
+		const keys = ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE'];
+		const env: Record<string, string> = {};
+		for (const key of keys) {
+			if (process.env[key]) {
+				env[key] = process.env[key] as string;
+			}
+		}
+		return env;
+	},
 	isDirectory: (path: string) => fs.statSync(path).isDirectory(),
 	getRawScripts: () => JSON.parse(JSON.stringify(AutomationScripts)) as RawAutomationScript[],
 	encryptRenderString,
@@ -275,11 +296,18 @@ const methods: RemoteMethods = {
 		return Promise.all(
 			urls.map(async (url) => {
 				try {
+					// URL 归一化：脚本托管地址可能含中文/空格等未转义字符
+					// （如 ScriptCat 托管脚本），Node 网络栈（axios）会直接抛 ERR_UNESCAPED_CHARACTERS，
+					// 统一经 URL 构造器百分号编码后再请求
+					let fetchUrl = url;
+					try {
+						fetchUrl = new URL(url).href;
+					} catch {}
 					// net.fetch 优先（系统代理，与浏览器一致），失败回退 axios 直连，各自保留真实错误原因
-					let result = await fetchViaNet(url);
+					let result = await fetchViaNet(fetchUrl);
 					if (result.error) {
 						const netError = result.error;
-						result = await fetchViaAxios(url);
+						result = await fetchViaAxios(fetchUrl);
 						if (result.error) {
 							result.error = `代理网络栈失败[${netError}]，直连失败[${result.error}]`;
 						}
@@ -323,11 +351,6 @@ export function remoteRegister(_win: BrowserWindow) {
 	nativeTheme.on('updated', () => {
 		win?.webContents?.send('system-theme-change', nativeTheme.shouldUseDarkColors);
 	});
-
-	// 通知渲染层窗口最大化状态（Linux 透明圆角窗口在最大化时需去除圆角，直角铺满屏幕）
-	const sendMaximizeState = () => win?.webContents?.send('window-maximize-change', win?.isMaximized() ?? false);
-	_win.on('maximize', sendMaximizeState);
-	_win.on('unmaximize', sendMaximizeState);
 }
 
 const _registerRemoteEvent = registerRemoteEvent;

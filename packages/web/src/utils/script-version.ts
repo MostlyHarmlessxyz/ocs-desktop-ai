@@ -25,6 +25,12 @@ export async function readQuestionInstallations(file: string): Promise<Record<st
 	}
 }
 
+export async function writeQuestionInstallations(file: string, installed: Record<string, QuestionInstallation>) {
+	const temporary = file + '.tmp';
+	await remote.fs.call('writeFileSync', temporary, JSON.stringify(installed), { mode: 0o600 });
+	await remote.fs.call('renameSync', temporary, file);
+}
+
 /** Global script metadata does not prove that an individual browser profile has installed it. */
 export function questionScriptsForProfile(
 	scripts: StoreUserScript[],
@@ -186,10 +192,16 @@ export interface ScriptToInstall {
  *
  * opts.skipRemoteCheck：弱网模式下整体跳过步骤 5/6/7 的远程检查，
  * 已安装脚本一律视为最新（未安装过的脚本仍按步骤 3 安装）
+ *
+ * opts.profileInitialized：目标浏览器 profile 是否已有脚本安装标记。
+ * lastInstalledVersion 是全局按脚本记录的，而脚本实际安装在每个浏览器独立的
+ * userDataDir 里——新建浏览器（全新 profile）中拓展内并没有脚本，若只看全局版本
+ * 会误判"已是最新"而跳过安装。调用方在启动时检测 profile 标记文件并传入 false，
+ * 此时全部启用脚本按首次安装处理（步骤 3）。
  */
 export async function filterScriptsNeedingInstall(
 	scripts: StoreUserScript[],
-	opts?: { skipRemoteCheck?: boolean }
+	opts?: { skipRemoteCheck?: boolean; profileInitialized?: boolean }
 ): Promise<ScriptToInstall[]> {
 	const forceUpdate = store.render.setting.browser.forceUpdateScript;
 	const result: ScriptToInstall[] = [];
@@ -217,8 +229,8 @@ export async function filterScriptsNeedingInstall(
 			continue;
 		}
 
-		// 3. 从未安装过 → 首次安装
-		if (!script.lastInstalledVersion) {
+		// 3. 从未安装过（全局无记录，或目标浏览器 profile 为全新）→ 首次安装
+		if (!script.lastInstalledVersion || opts?.profileInitialized === false) {
 			result.push({ script, latestVersion: script.info?.version || '' });
 			continue;
 		}

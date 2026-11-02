@@ -11,73 +11,145 @@
 				src="../../public/favicon.png"
 			/>
 		</span>
-		<a-dropdown
+		<!--
+			使用 a-trigger 替代 a-dropdown：当前 arco 版本的 Dropdown 不透传
+			trigger-props（mouseEnterDelay 默认 100ms 无法配置），导致 hover 展开有延迟。
+			a-trigger 可直接配置 mouse-enter-delay。
+			注意：不能设为 0 —— Trigger 在 delay 为 0 时不会清除挂起的关闭定时器，
+			会导致鼠标移入弹窗后仍被延迟关闭；1ms 人眼无感且行为正确。
+		-->
+		<a-trigger
+			v-model:popup-visible="toolsMenuVisible"
 			class="tittle-dropdown"
 			trigger="hover"
-			:popup-max-height="false"
+			position="bl"
+			:popup-offset="4"
+			:mouse-enter-delay="1"
+			animation-name="slide-dynamic-origin"
+			auto-fit-transform-origin
 		>
 			<span class="title-item"> 工具 </span>
 			<template #content>
-				<a-doption style="width: 200px"> </a-doption>
-
-				<a-doption @click="openSetup"> <Icon type="settings">初始化设置</Icon> </a-doption>
-				<a-doption @click="router.push('/questions')"> <Icon type="psychology">智能搜题</Icon> </a-doption>
-				<a-doption @click="router.push('/setting?panel=question')"> <Icon type="tune">搜题设置</Icon> </a-doption>
-				<a-doption
-					class="border-bottom"
-					@click="checkBrowserCaches"
+				<div
+					class="arco-dropdown"
+					@click="toolsMenuVisible = false"
 				>
-					<Icon type="delete">清除浏览器缓存</Icon>
-				</a-doption>
+					<ul class="arco-dropdown-list">
+						<a-doption
+							uninject-context
+							style="width: 200px"
+						>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="router.push('/questions')"
+						>
+							<a-space size="mini"><BrainIcon />智能搜题</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="router.push('/setting?panel=question')"
+						>
+							<a-space size="mini"><SlidersHorizontalIcon />搜题设置</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							class="border-bottom"
+							@click="checkBrowserCaches"
+						>
+							<a-space size="mini"><Trash2Icon />清除浏览器缓存</a-space>
+						</a-doption>
 
-				<a-doption @click="exportData"> <Icon type="save">导出数据</Icon> </a-doption>
-				<a-doption
-					class="border-bottom"
-					@click="importData"
-				>
-					<Icon type="upload">导入数据</Icon>
-				</a-doption>
-				<a-doption @click="relaunch"> <Icon type="sync">重启软件</Icon> </a-doption>
-				<a-doption @click="openLog"> <Icon type="folder">日志目录</Icon> </a-doption>
-				<a-doption @click="openDevTools"> <Icon type="code">开发者工具</Icon> </a-doption>
+						<a-doption
+							uninject-context
+							@click="exportData"
+						>
+							<a-space size="mini"><SaveIcon />导出数据</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							class="border-bottom"
+							@click="importData"
+						>
+							<a-space size="mini"><UploadIcon />导入数据</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="relaunch"
+						>
+							<a-space size="mini"><RefreshCwIcon />重启软件</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="openLog"
+						>
+							<a-space size="mini"><FolderIcon />日志目录</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="openDevTools"
+						>
+							<a-space size="mini"><CodeIcon />开发者工具</a-space>
+						</a-doption>
+					</ul>
+				</div>
 			</template>
-		</a-dropdown>
+		</a-trigger>
 
-		<a-dropdown
+		<a-trigger
+			v-model:popup-visible="helpMenuVisible"
 			class="tittle-dropdown"
-			position="bottom"
 			trigger="hover"
-			:popup-max-height="false"
+			position="bl"
+			:popup-offset="4"
+			:mouse-enter-delay="1"
+			animation-name="slide-dynamic-origin"
+			auto-fit-transform-origin
 		>
 			<span class="title-item"> 帮助 </span>
 			<template #content>
-				<a-doption
-					style="width: 200px"
-					@click="about"
+				<div
+					class="arco-dropdown"
+					@click="helpMenuVisible = false"
 				>
-					<Icon type="book">使用教程</Icon>
-				</a-doption>
-				<a-doption @click="allNotify"> <Icon type="notes">查看通知</Icon> </a-doption>
+					<ul class="arco-dropdown-list">
+						<a-doption
+							uninject-context
+							style="width: 200px"
+							@click="about"
+						>
+							<a-space size="mini"><BookIcon />使用教程</a-space>
+						</a-doption>
+						<a-doption
+							uninject-context
+							@click="allNotify"
+						>
+							<a-space size="mini"><NotepadTextIcon />查看通知</a-space>
+						</a-doption>
 
-				<a-doption @click="showVersionLogs"> <Icon type="notes">更新日志</Icon> </a-doption>
+						<a-doption
+							uninject-context
+							@click="showVersionLogs"
+						>
+							<a-space size="mini"><NotepadTextIcon />更新日志</a-space>
+						</a-doption>
 
-				<TitleLink :url="OCS_WEBSITE + '/'">
-					<template #title>
-						<Icon type="home">软件官网</Icon>
-					</template>
-				</TitleLink>
+						<TitleLink :url="OCS_WEBSITE + '/'">
+							<template #title>
+								<a-space size="mini"><HouseIcon />软件官网</a-space>
+							</template>
+						</TitleLink>
+					</ul>
+				</div>
 			</template>
-		</a-dropdown>
+		</a-trigger>
 
 		<button
 			class="question-shortcut"
 			:title="`正在处理 ${questionCounts.active} 题，待复核 ${questionCounts.pending} 题`"
 			@click="router.push(questionCounts.pending ? '/questions?tab=review' : '/questions')"
 		>
-			<Icon
-				type="psychology"
-				:size="15"
-			/>
+			<BrainIcon :size="15" />
 			<span>智能搜题</span>
 			<span
 				v-if="questionCounts.active"
@@ -100,7 +172,9 @@
 import { h, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useQuestionUpdates } from '../features/question/useQuestionUpdates';
-import { fetchRemoteNotify, date, about, getRemoteInfos } from '../utils';
+import { fetchRemoteNotify, date, about, fetchChangelogMarkdown } from '../utils';
+import { ensureUpdaterChangelogStyle } from '../utils/ipc';
+import { marked } from 'marked';
 import { remote } from '../utils/remote';
 import TitleLink from './TitleLink.vue';
 import { Message, Modal, InputPassword } from '@arco-design/web-vue';
@@ -113,8 +187,20 @@ import { Folder, root } from '../fs/folder';
 import { FolderOptions, FolderType } from '../fs/interface';
 import { Browser } from '../fs/browser';
 import { checkBrowserCaches } from '../utils/browser';
-import Icon from './Icon.vue';
 import PinButton from './PinButton.vue';
+import {
+	BrainIcon,
+	SlidersHorizontalIcon,
+	Trash2Icon,
+	SaveIcon,
+	UploadIcon,
+	RefreshCwIcon,
+	FolderIcon,
+	CodeIcon,
+	BookIcon,
+	NotepadTextIcon,
+	HouseIcon
+} from 'lucide-vue-next';
 
 const { shell } = electron;
 const router = useRouter();
@@ -128,11 +214,9 @@ useQuestionUpdates(async () => {
 	}
 });
 
-// 打开初始化设置弹窗（手动触发时跳过「欢迎使用」引导，直接进入初始化）
-function openSetup() {
-	store.render.state.welcome = false;
-	store.render.state.setup = true;
-}
+/** 标题栏菜单弹窗显隐（点击选项后关闭） */
+const toolsMenuVisible = ref(false);
+const helpMenuVisible = ref(false);
 
 // 重启（dev 感知：pnpm dev 下提示手动重启终端，见 utils/restart.ts）
 function relaunch() {
@@ -359,17 +443,27 @@ function openDevTools() {
 }
 
 async function showVersionLogs() {
-	const infos = await getRemoteInfos();
+	// 与 electron-updater 同源：直接拉取更新源目录的 CHANGELOG.md（markdown 全文展示）
+	let changelog = '';
+	try {
+		changelog = await fetchChangelogMarkdown();
+	} catch (err) {
+		Message.error('更新日志获取失败：' + err);
+		return;
+	}
 
-	Modal.confirm({
-		title: () => '🎉 更新日志 🎉',
+	ensureUpdaterChangelogStyle();
+
+	Modal.open({
+		title: () => '🎉更新日志',
+		titleAlign: 'center',
 		okText: '确定',
 		hideCancel: true,
-		simple: true,
+		simple: false,
 		width: 600,
 		content: () =>
 			h('div', [
-				h('h', [
+				h('div', [
 					'可前往官网下载最新版本：',
 					h(
 						'a',
@@ -380,36 +474,18 @@ async function showVersionLogs() {
 						OCS_DOWNLOAD_PAGE
 					)
 				]),
-				h(
-					'div',
-					{
-						style: {
-							maxHeight: '320px',
-							overflow: 'auto'
+				h('div', {
+					class: 'update-changelog-content',
+					innerHTML: marked.parse(changelog || '暂无更新日志'),
+					// markdown 中的链接（commit/compare 链接）统一用系统浏览器打开
+					onClick: (event: MouseEvent) => {
+						const anchor = (event.target as HTMLElement).closest('a');
+						if (anchor) {
+							event.preventDefault();
+							shell.openExternal(anchor.href);
 						}
-					},
-					infos.versions.map((item) =>
-						h('div', [
-							h(
-								'div',
-								{
-									style: {
-										marginBottom: '6px',
-										fontWeight: 'bold'
-									}
-								},
-								item.tag
-							),
-							h(
-								'ul',
-								(item.description.feat || [])
-									.concat(item.description.fix || [])
-									.concat(item.description.other || [])
-									.map((text: string) => h('li', text))
-							)
-						])
-					)
-				)
+					}
+				})
 			])
 	});
 }

@@ -1,6 +1,6 @@
 <template>
 	<a-space
-		v-if="readOnly === false || tags.length > 0"
+		v-if="(!readOnly && !hideAdd) || tags.length > 0"
 		class="flex-wrap"
 		:size="1"
 	>
@@ -30,12 +30,12 @@
 		</template>
 
 		<a-tag
-			v-if="!readOnly"
+			v-if="!readOnly && !hideAdd"
 			style="border: 1px gray; border-style: dashed; cursor: pointer"
 			:size="props.size"
 			@click="showModel"
 		>
-			添加 <icon-plus />
+			添加 <PlusIcon />
 		</a-tag>
 	</a-space>
 
@@ -97,6 +97,7 @@ import { Tag } from '../fs/interface';
 // @ts-ignore
 import ColorPicker from 'colorpicker-v3'; // 注册组件
 import 'colorpicker-v3/style.css'; // 引入样式文件
+import { PlusIcon } from 'lucide-vue-next';
 const object = Object;
 
 const props = withDefaults(
@@ -104,10 +105,13 @@ const props = withDefaults(
 		tags: Tag[];
 		size: 'medium' | 'large' | 'small' | undefined;
 		readOnly?: boolean;
+		/** 隐藏「添加」按钮（添加入口外置时，通过 expose 的 openAddModal 打开弹窗） */
+		hideAdd?: boolean;
 		defaultColor?: string;
 	}>(),
 	{
 		readOnly: false,
+		hideAdd: false,
 		size: 'small',
 		defaultColor: '#808080'
 	}
@@ -150,6 +154,9 @@ const showModel = () => {
 		inputRef.value.focus();
 	}, 300);
 };
+
+/** 外置添加入口（如浏览器面板操作栏按钮）通过 ref 调用打开添加标签弹窗 */
+defineExpose({ openAddModal: showModel });
 
 const handleInputConfirm = () => {
 	const inputValue = state.inputValue;

@@ -1,10 +1,16 @@
 import { Instance as Chalk } from 'chalk';
-import { LoggerCore, DEFAULT_SERVER_PORT } from '@ocs-desktop/common';
+import {
+	LoggerCore,
+	DEFAULT_SERVER_PORT,
+	SUPPORTED_BROWSER_MAX_MAJOR,
+	formatExtensionArguments
+} from '@ocs-desktop/common';
 import path, { basename } from 'path';
 import fs from 'fs';
 import { chromium, BrowserContext, Page, LaunchOptions, Response, Request, CDPSession } from 'playwright-core';
-import type { AppStore, Config, ScriptWorker as ScriptWorkerContract } from '@ocs-desktop/common';
+import type { AppStore, Config, ScriptWorker as ScriptWorkerContract, SystemScriptContext } from '@ocs-desktop/common';
 import { AutomationScripts, LegacyScriptMappings } from '../scripts/index';
+import { runSystemScripts } from '../scripts/system';
 import _get from 'lodash/get';
 import child_process from 'child_process';
 import http from 'http';
@@ -89,6 +95,10 @@ export class ScriptWorker implements ScriptWorkerContract {
 	private pageListBroadcastTimer?: ReturnType<typeof setTimeout>;
 	/** 页面列表跟踪的监听清理函数集合 */
 	private pageListCleanups: (() => void)[] = [];
+	/** 内存占用上报定时器（launch 后启动，close/dispose 时清理） */
+	private memoryReportTimer?: ReturnType<typeof setInterval>;
+	/** 上次 CPU 采样（累计 cpuTime 秒数 + 采样时间戳），用于计算占用率 */
+	private lastCpuSample?: { time: number; cpuTime: number };
 	static langs?: Langs;
 	static lang: (key: keyof Langs, def?: string, replace?: Record<string, string>) => string = (key, def, replace) => {
 		const result = _get(ScriptWorker.langs, key, def);
@@ -185,7 +195,7 @@ export class ScriptWorker implements ScriptWorkerContract {
 		if (process.platform === 'win32') {
 			const major = getBrowserMajorVersion(options.executablePath);
 			console.log('major', major);
-			if (major && major > 137) {
+			if (major && major > SUPPORTED_BROWSER_MAX_MAJOR) {
 				console.error(
 					ScriptWorker.lang(
 						'error_when_browser_version_too_high',
@@ -253,6 +263,8 @@ export class ScriptWorker implements ScriptWorkerContract {
 
 					// 浏览器启动完成
 					send('launched');
+					// 内存占用定时上报（真实值供渲染端启动预检测使用）
+					this.startMemoryReporting();
 					// 截图预览的启停交由渲染进程按卡片可见性驱动（Page.startScreencast），
 					// 此处不再自启动定时截图，避免不可见卡片浪费资源
 				},
@@ -277,6 +289,8 @@ export class ScriptWorker implements ScriptWorkerContract {
 				browserInfo: this.browserInfo,
 				uid: this.uid,
 				config: this.config,
+				/** AppStore 快照（系统自动化程序使用） */
+				store: this.store,
 				/** 网页下载文件保存目录（软件设置中的"文件下载"目录） */
 				downloadsPath: this.store?.paths.downloadFolder,
 				...options
@@ -299,19 +313,19 @@ export class ScriptWorker implements ScriptWorkerContract {
 								'error_when_browser_launch_failed_too_fast',
 								'异常启动，请尝试重启浏览器，或者在设置中更换其他浏览器',
 								{
-									error: err.message.substring(0, 500)
+									error: err.message.substring(0, 4000)
 								}
 							)
 						);
 					} else {
-						console.error('异常关闭，请尝试重启浏览器。', err.message.substring(0, 500));
+						console.error('异常关闭，请尝试重启浏览器。', err.message.substring(0, 4000));
 					}
 				} else {
 					// 其它启动错误（如无法读取浏览器路径/权限/启动参数非法等）
-					console.error('浏览器启动失败 : ', err.message.substring(0, 500));
+					console.error('浏览器启动失败 : ', err.message.substring(0, 4000));
 				}
 			} else {
-				console.error('未知错误 : ', String(err).substring(0, 500));
+				console.error('未知错误 : ', String(err).substring(0, 4000));
 			}
 			// 统一走 close()：内部会 send('browser-closed') 并 process.exit()
 			return await this.close();
@@ -321,12 +335,75 @@ export class ScriptWorker implements ScriptWorkerContract {
 		send('init');
 	}
 
+	/**
+	 * 获取该浏览器实例的真实资源占用（内存 MB + 全部子进程累计 cpuTime 秒）。
+	 * CDP 的 SystemInfo.getProcessInfo 只提供进程 PID 与 cpuTime（无内存字段），
+	 * 内存需再经系统 API 按 PID 汇总（见 getPidsMemoryMB）。
+	 */
+	async getResourceUsage(): Promise<{ mb: number; cpuTime: number }> {
+		if (!this.browser) return { mb: 0, cpuTime: 0 };
+		try {
+			const pwBrowser = this.browser.browser();
+			if (!pwBrowser) return { mb: 0, cpuTime: 0 };
+			const session = await pwBrowser.newBrowserCDPSession();
+			let pids: number[] = [];
+			let cpuTime = 0;
+			try {
+				const result = (await session.send('SystemInfo.getProcessInfo' as any)) as any;
+				const infos = (result?.processInfo || []) as any[];
+				pids = infos.map((p) => p.id).filter((id) => typeof id === 'number');
+				cpuTime = infos.reduce((sum, p) => sum + (p.cpuTime || 0), 0);
+			} finally {
+				await session.detach().catch(() => {});
+			}
+			return { mb: await getPidsMemoryMB(pids), cpuTime };
+		} catch (e) {
+			console.warn('[memory] 获取浏览器资源占用失败：', e);
+			return { mb: 0, cpuTime: 0 };
+		}
+	}
+
+	/** 启动资源占用定时上报：launch 后立即上报一次，此后每 10s 上报（事件：memory-usage） */
+	private startMemoryReporting() {
+		this.stopMemoryReporting();
+		this.lastCpuSample = undefined;
+		const report = async () => {
+			const { mb, cpuTime } = await this.getResourceUsage();
+			if (mb > 0 && !this.closing) {
+				// CPU 占用率：两次采样的累计 cpuTime 差值 / 墙钟时间（多核并行可超过 100%）
+				let cpuPercent = 0;
+				const now = Date.now();
+				if (this.lastCpuSample) {
+					const dt = (now - this.lastCpuSample.time) / 1000;
+					if (dt > 0) {
+						cpuPercent = Math.max(0, ((cpuTime - this.lastCpuSample.cpuTime) / dt) * 100);
+					}
+				}
+				this.lastCpuSample = { time: now, cpuTime };
+				send('memory-usage', this.uid, { mb, cpuPercent: Math.round(cpuPercent * 10) / 10 });
+			}
+		};
+		report();
+		this.memoryReportTimer = setInterval(report, 10 * 1000);
+		// unref：定时器不应阻止 worker 进程退出
+		this.memoryReportTimer.unref?.();
+	}
+
+	private stopMemoryReporting() {
+		if (this.memoryReportTimer) {
+			clearInterval(this.memoryReportTimer);
+			this.memoryReportTimer = undefined;
+		}
+		this.lastCpuSample = undefined;
+	}
+
 	async close() {
 		// 先置关闭屏障：阻止在途的 startScreencast 后续附着新的 CDP screencast session，
 		// 否则 browser.close() 撞上活跃 screencast 可能永久挂起（渲染端一直转圈）
 		this.closing = true;
 		await this.questionBindingCleanup?.();
 		this.questionBindingCleanup = undefined;
+		this.stopMemoryReporting();
 		this.stopPageListTracking();
 		// 仅内部停止推流（detach session），不发 screencast-cleared：
 		// 渲染进程在 browser-closed 时保留最后一帧，用于"浏览器关闭后的预览图"展示
@@ -356,6 +433,7 @@ export class ScriptWorker implements ScriptWorkerContract {
 		await this.questionBindingCleanup?.();
 		this.questionBindingCleanup = undefined;
 		try {
+			this.stopMemoryReporting();
 			this.stopPageListTracking();
 		} catch {}
 		try {
@@ -856,13 +934,6 @@ function formatBrowserEnhancementArgs(config?: BrowserConfig): string[] {
 	];
 }
 
-/** 格式化浏览器拓展启动参数 */
-function formatExtensionArguments(extensionPaths: string[]) {
-	const paths = extensionPaths.map((p) => p.replace(/\\/g, '/')).join(',');
-	// --disable-extensions-except 防止 Chrome 在某些版本/策略下禁用通过 --load-extension 加载的扩展
-	return paths.length === 0 ? [] : [`--load-extension=${paths}`, `--disable-extensions-except=${paths}`];
-}
-
 function loggerPrefix() {
 	return `[OCS] ${new Date().toLocaleTimeString()}`;
 }
@@ -984,6 +1055,7 @@ export async function launchBrowser({
 	config,
 	downloadsPath,
 	onQuestionBinding,
+	store,
 	onLaunch
 }: Required<Pick<LaunchOptions, 'executablePath' | 'headless' | 'args'>> & {
 	/** 用户数据目录 */
@@ -1011,6 +1083,8 @@ export async function launchBrowser({
 	/** 网页下载文件保存目录（未传入时回退为本地浏览器下载） */
 	downloadsPath?: string;
 	onQuestionBinding?: (cleanup: () => Promise<void>) => void;
+	/** AppStore 快照（系统自动化程序使用，如脚本列表同步） */
+	store?: AppStore;
 	onLaunch?: (browser: BrowserContext) => void;
 }) {
 	return new Promise<void>((resolve, reject) => {
@@ -1018,6 +1092,19 @@ export async function launchBrowser({
 		prepareDownloadPreferences(userDataDir, downloadsPath);
 		const display = browserDisplayOptions(process.env, args, headless);
 		console.log('浏览器显示后端：', display.backend);
+
+		// Linux 显示环境诊断：worker 由渲染进程 fork，沙箱清理后可能丢失 DISPLAY，
+		// 记录恢复后的环境变量与显示后端（经 worker stdout 回流到浏览器日志面板）
+		if (process.platform === 'linux') {
+			console.log(
+				'[display]',
+				`DISPLAY=${display.env.DISPLAY || '(空)'}`,
+				`WAYLAND_DISPLAY=${display.env.WAYLAND_DISPLAY || '(空)'}`,
+				`XDG_SESSION_TYPE=${display.env.XDG_SESSION_TYPE || '(空)'}`,
+				'→',
+				display.backend
+			);
+		}
 
 		chromium
 			.launchPersistentContext(userDataDir, {
@@ -1077,14 +1164,23 @@ export async function launchBrowser({
 					// 显示步骤提示（渲染到导航页，兼容新标签页扩展 iframe）
 					const step = createStepFunction(blankPage, serverPort);
 
-					// 打开开发者模式（MV3 运行脚本必需）
-					await openExtensionDeveloperMode(browser, executablePath.includes('edge'));
-					// 通过 service worker 验证脚本管理器拓展已加载（按路径推导扩展 ID 精确匹配，间接确认开发者模式开启）
-					await verifyExtensionsLoaded(browser, extensionPaths);
+					// 系统自动化程序上下文（静态流程统一编排，见 scripts/system/）
+					const sysCtx: SystemScriptContext = {
+						browser,
+						uid,
+						store,
+						send,
+						step,
+						executablePath,
+						extensionPaths,
+						userDataDir,
+						userscripts,
+						enabledScriptCount,
+						closeableExtensionHomepages
+					};
 
-					// 必须先打开开发者模式，才能关闭额外拓展页，否则打开开发者模式可能会重启插件，导致出现新的额外页面
-					// 关闭拓展加载时弹出的首页（并行清理，不阻塞；未出现欢迎页属正常情况）
-					waitAndCloseExtensionHomepage({ browser, closeableExtensionHomepages });
+					// 关键路径系统流程：开发者模式 → 用户脚本权限 → 拓展加载验证（失败中断启动）
+					await runSystemScripts(sysCtx, 'launch');
 
 					// 监听网络请求（注册快且自动化程序依赖，放关键段）
 					// 「软件辅助」开关关闭时不注册路由：脚本不再识别为软件环境，自动化增强不可用
@@ -1100,18 +1196,13 @@ export async function launchBrowser({
 					onLaunch?.(browser);
 					resolve();
 
-					// 后台段：安装用户脚本 → 运行自动化程序（失败不影响浏览器可用状态，仅提示）
+					// 后台段系统流程：脚本安装/更新 → 拓展主页清理 → 脚本列表双向同步；
+					// 随后运行用户自动化程序（失败不影响浏览器可用状态，仅提示）
 					(async () => {
 						try {
-							// 安装用户脚本
-							const { warn, results } = await setupUserScripts({ browser, userscripts, step, enabledScriptCount });
-							// 回传安装结果（供渲染进程按成功情况更新 lastInstalledVersion）
-							send('userscript-install-result', results);
-
-							// 运行自动化程序
+							await runSystemScripts(sysCtx, 'post');
 							await runAutomationScripts({ browser, automationScripts, serverPort, step });
-
-							await step(['浏览器初始化完成。'].concat(warn), { loading: false, warn: !!warn.length });
+							await step(['浏览器初始化完成。'], { loading: false });
 						} catch (err) {
 							// 后台任务异常（如浏览器被用户提前关闭）：仅记录，不再中断启动流程
 							console.warn('后台初始化任务中断：', err instanceof Error ? err.message : String(err));
@@ -1127,144 +1218,53 @@ export async function launchBrowser({
 	});
 }
 
-/**
- * 安装结果
- */
-interface InstallResult {
-	url: string;
-	success: boolean;
-	reason?: string;
-}
-
-/**
- * 安装/更新脚本（逐个安装，精确判定每个脚本的成功/失败）
- */
-async function initScripts(urls: string[], browser: BrowserContext): Promise<InstallResult[]> {
-	console.log('install ', urls);
-	const results: InstallResult[] = [];
-	for (const url of urls) {
-		results.push(await installOneScript(url, browser));
-	}
-	return results;
-}
-
-/**
- * 安装单个脚本：触发安装页 -> 点击安装 -> 等待成功信号
- */
-async function installOneScript(url: string, browser: BrowserContext): Promise<InstallResult> {
-	// 触发前快照已有页面 URL：浏览器常驻的扩展页（如脚本管理器后台页）会命中 /extension:\/\//，
-	// 快照排除后才能正确识别本次新弹出的脚本管理器安装页
-	const existingUrls = new Set(browser.pages().map((p) => p.url()));
-	const trigger = await browser.newPage();
-	try {
-		// 触发拓展拦截 .user.js 并弹出安装页（3s 内未完成则关闭触发页）
-		await Promise.race([
-			trigger.goto(url).catch(() => {}),
-			sleep(3 * 1000).then(() => trigger.close().catch(() => {}))
-		]);
-	} catch {}
-
-	// 等待 extension:// 安装页出现
-	const installPage = await waitForInstallPage(browser, 10 * 1000, existingUrls);
-	if (!installPage) {
-		await trigger.close().catch(() => {});
-		return { url, success: false, reason: '安装页未出现' };
-	}
-
-	try {
-		await installPage.bringToFront();
-		await sleep(1000);
-		const clicked = await clickInstallButton(installPage);
-		const success = await waitForInstallSuccess(installPage, 15 * 1000);
-		return {
-			url,
-			success,
-			reason: success ? undefined : clicked ? '安装未确认' : '未找到安装按钮'
-		};
-	} finally {
-		if (!installPage.isClosed()) {
-			await installPage.close().catch(() => {});
-		}
-		await trigger.close().catch(() => {});
-	}
-}
-
-/**
- * 轮询等待 extension:// 安装页出现
- * @param existingUrls 触发安装前已存在的页面 URL 快照，
- * 用于排除常驻扩展页（如脚本管理器后台页），仅匹配本次新弹出的扩展页面
- */
-async function waitForInstallPage(
-	browser: BrowserContext,
-	timeout: number,
-	existingUrls: Set<string>
-): Promise<Page | undefined> {
-	const end = Date.now() + timeout;
-	while (Date.now() < end) {
-		const candidates = browser.pages().filter((p) => /extension:\/\//.test(p.url()) && !existingUrls.has(p.url()));
-		// 多个候选时优先取 URL 含安装特征的页面（脚本管理器安装页路径含 install，
-		// 且 query 携带 .user.js / userScript 脚本地址），兜底取第一个
-		const page = candidates.find((p) => /install|user\.js|userscript/i.test(p.url())) || candidates[0];
-		if (page) return page;
-		await sleep(500);
-	}
-	return undefined;
-}
-
-/**
- * 点击安装按钮，返回是否点到按钮
- * 优先按按钮文本精确匹配（安装/Install 等），兜底 class 含 primary
- */
-async function clickInstallButton(installPage: Page): Promise<boolean> {
-	return await installPage.evaluate(() => {
-		const candidates = [
-			...Array.from(document.querySelectorAll<HTMLElement>('button')),
-			...Array.from(document.querySelectorAll<HTMLElement>('[type="button"]')),
-			...Array.from(document.querySelectorAll<HTMLElement>('[class*="primary"]'))
-		];
-		const btn =
-			candidates.find((el) => /安装|Install|确定|Confirm|OK/i.test((el.textContent || '').trim())) ||
-			candidates.find((el) => !!el.className && /primary/i.test(el.className));
-		if (btn) {
-			btn.click();
-			return true;
-		}
-		return false;
-	});
-}
-
-/**
- * 等待安装成功信号（页面关闭 / 跳转离开安装页 / 成功文本 / 按钮禁用）
- */
-async function waitForInstallSuccess(installPage: Page, timeout: number): Promise<boolean> {
-	const end = Date.now() + timeout;
-	while (Date.now() < end) {
-		// 页面已关闭
-		if (installPage.isClosed()) return true;
-		// 页面已跳转离开安装页
-		if (!/extension:\/\//.test(installPage.url())) return true;
-		// 文本/按钮状态
-		const matched = await installPage
-			.evaluate(() => {
-				const text = document.body?.innerText || '';
-				if (/已安装|已存在|安装成功|重新安装|Installed|Reinstall/i.test(text)) return true;
-				const btn = document.querySelector<HTMLButtonElement>('[class*="primary"]');
-				if (btn && (btn.disabled || btn.getAttribute('disabled') !== null)) return true;
-				return false;
-			})
-			.catch(() => false);
-		if (matched) return true;
-		await sleep(500);
-	}
-	return false;
-}
-
 function send(event: string, ...args: any[]) {
 	process.send?.({ event, args });
 }
 
-function sleep(t: number) {
-	return new Promise((resolve, reject) => setTimeout(resolve, t));
+/** execFile 的 Promise 包装（用于系统内存查询命令） */
+function execCmd(file: string, args: string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		child_process.execFile(file, args, { timeout: 10_000, windowsHide: true }, (err, stdout) => {
+			if (err) reject(err);
+			else resolve(String(stdout));
+		});
+	});
+}
+
+/**
+ * 按 PID 汇总进程真实内存（MB）：
+ * - Linux：读 /proc/<pid>/status 的 VmRSS
+ * - macOS：ps -o rss
+ * - Windows：PowerShell Get-Process 的 WorkingSet64
+ */
+async function getPidsMemoryMB(pids: number[]): Promise<number> {
+	if (pids.length === 0) return 0;
+	if (process.platform === 'linux') {
+		let totalKB = 0;
+		for (const pid of pids) {
+			try {
+				const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+				const match = status.match(/VmRSS:\s+(\d+)\s+kB/);
+				if (match) totalKB += parseInt(match[1], 10);
+			} catch {
+				// 进程可能已退出，忽略
+			}
+		}
+		return Math.round(totalKB / 1024);
+	}
+	if (process.platform === 'darwin') {
+		const out = await execCmd('ps', ['-o', 'rss=', '-p', pids.join(',')]);
+		const totalKB = out.split('\n').reduce((sum, line) => sum + (parseInt(line.trim(), 10) || 0), 0);
+		return Math.round(totalKB / 1024);
+	}
+	// Windows
+	const out = await execCmd('powershell', [
+		'-NoProfile',
+		'-Command',
+		`(Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | Measure-Object WorkingSet64 -Sum).Sum`
+	]);
+	return Math.round((parseInt(out.trim(), 10) || 0) / 1024 / 1024);
 }
 
 /**
@@ -1279,45 +1279,6 @@ function transformScriptConfigToRaw(configs: AS['configs']) {
 		}
 	}
 	return raw;
-}
-
-/**
- * 安装用户脚本
- */
-async function setupUserScripts(opts: {
-	browser: BrowserContext;
-	userscripts: string[];
-	step: StepTips;
-	enabledScriptCount: number;
-}): Promise<{ warn: string[]; results: InstallResult[] }> {
-	const { userscripts, browser, step, enabledScriptCount } = opts;
-
-	const warn: string[] = [];
-	const results: InstallResult[] = [];
-	// 安装用户脚本
-	if (userscripts.length) {
-		await step('正在安装用户脚本...（如长时间未完成请尝试重启浏览器 ）');
-		// 载入本地脚本
-		try {
-			const res = await initScripts(userscripts, browser);
-			results.push(...res);
-			const failed = res.filter((r) => !r.success);
-			if (failed.length) {
-				warn.push(`以下用户脚本安装失败，下次启动将重试：${failed.map((f) => f.url).join('、')}`);
-			}
-		} catch (e) {
-			// @ts-ignore
-			console.error('脚本安装失败：', e.message);
-			// await html('脚本载入失败，请手动更新，或者忽略。' + e.message);
-		}
-	} else {
-		if (enabledScriptCount === 0) {
-			warn.push('检测到您的软件中并未开启任何用户脚本，可能会导致预期脚本不运行。');
-		}
-		// enabledScriptCount > 0 且 userscripts 为空 → 所有脚本均为最新，无需更新，无需提示
-	}
-
-	return { warn, results };
 }
 
 /**
@@ -1378,40 +1339,6 @@ async function runAutomationScripts(opts: {
 			})
 		);
 	}
-}
-
-/**
- * 关闭浏览器拓展主页
- */
-async function waitAndCloseExtensionHomepage(opts: { browser: BrowserContext; closeableExtensionHomepages: string[] }) {
-	return new Promise<void>((resolve) => {
-		const timeout = setTimeout(() => {
-			clearInterval(interval);
-			// 欢迎页未出现属正常情况（拓展已加载过），拓展加载是否成功已由 verifyExtensionsLoaded 检测
-			resolve();
-		}, 20 * 1000);
-		const interval = setInterval(async () => {
-			const includes: Page[] = [];
-			for (const page of opts.browser.pages()) {
-				// 当拓展主页无法访问时，会跳转到chrome-error://chromewebdata/，此时获取的url为chrome-error://chromewebdata/，而不是拓展主页的url，但是title是拓展主页的host
-				const title = page.url() === 'chrome-error://chromewebdata/' ? await page.title() : '';
-				if (
-					opts.closeableExtensionHomepages.some((homepage) =>
-						page.url() === 'chrome-error://chromewebdata/' ? homepage.includes(title) : page.url().includes(homepage)
-					)
-				) {
-					includes.push(page);
-				}
-			}
-			if (includes.length) {
-				clearInterval(interval);
-				clearTimeout(timeout);
-				Promise.all(includes.map(async (page) => page.close()))
-					.then(() => resolve())
-					.catch(() => resolve());
-			}
-		}, 1000);
-	});
 }
 
 /**
@@ -1865,159 +1792,6 @@ function openUrl(url: string) {
 	}
 }
 
-/**
- * 打开浏览器拓展开发者模式（由于 MV3 的限制，运行脚本需要打开开发者模式）。
- * 仅执行开启动作；是否真正开启由后续 verifyExtensionsLoaded 的 service worker 检测间接确认
- * （开发者模式关闭时侧载拓展会被禁用，service worker 不会运行），
- * 不依赖 chrome://extensions/ 的 DOM 回读，避免页面结构变化导致的不稳定。
- */
-async function openExtensionDeveloperMode(browser: BrowserContext, edge: boolean = false) {
-	const page = await browser.newPage();
-	await page.goto('chrome://extensions/');
-
-	try {
-		await page.bringToFront();
-		await page.waitForTimeout(200);
-		if (edge) {
-			const els = await page.$$('[aria-label="扩展 菜单"]');
-			await els[1]?.click();
-			const element = await page.waitForSelector('#developer-mode', {
-				timeout: 5000
-			});
-			if (await element.evaluate<boolean, HTMLInputElement>((el) => el.checked === false)) {
-				await element.click();
-			}
-		} else {
-			const element = await page.waitForSelector('#devMode', {
-				timeout: 5000
-			});
-			// 如果没有开启开发者模式
-			if (
-				await element.evaluate<boolean, HTMLDivElement>((el) => el.getAttribute('aria-pressed')?.toString() === 'false')
-			) {
-				await element.click();
-				// 重新加载拓展，否则需要重启浏览器才能使用
-				const extensions = await page.$$('[id="dev-reload-button"]');
-				for (const ext of extensions) {
-					await ext.click();
-					await page.waitForTimeout(200);
-				}
-			}
-		}
-		console.log('开发者模式已打开');
-	} catch (err) {
-		await page.close().catch(() => {});
-		throw err;
-	}
-	await page.waitForTimeout(500);
-	await page.close();
-}
-
-/** 将 SHA256 摘要前 16 字节按 Chromium 规则映射为扩展 ID（每 4bit nibble -> 'a'-'p'） */
-function hashToExtensionId(hash: Buffer): string {
-	let id = '';
-	for (let i = 0; i < 16; i++) {
-		id += String.fromCharCode('a'.charCodeAt(0) + (hash[i] >> 4));
-		id += String.fromCharCode('a'.charCodeAt(0) + (hash[i] & 0xf));
-	}
-	return id;
-}
-
-/**
- * 计算扩展的所有候选 Chrome Extension ID：
- * 1. manifest.json 含 key（脚本猫/油猴等商店分发包）：ID 由公钥推导 ——
- *    SHA256(base64 解码的 DER 公钥)，与安装路径无关（已经实测验证）。
- * 2. 无 key 的未打包扩展：按路径推导 —— SHA256(路径 UTF-8)。
- *    Chromium 各版本/平台的路径规范化有差异（仅驱动器小写 vs 全路径小写、正反斜杠），
- *    生成全部变体作为候选，匹配任一即视为该扩展。
- */
-function computeExtensionIdCandidates(extensionPath: string): string[] {
-	const ids = new Set<string>();
-	try {
-		const manifestPath = path.join(extensionPath, 'manifest.json');
-		if (fs.existsSync(manifestPath)) {
-			const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-			if (typeof manifest.key === 'string' && manifest.key) {
-				ids.add(hashToExtensionId(crypto.createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest()));
-			}
-		}
-	} catch {
-		// manifest 读取/解析失败：仅使用路径推导
-	}
-	const fwd = extensionPath.replace(/\\/g, '/');
-	// 仅驱动器号小写（新版 Chromium）与全路径小写（旧版）两种规范化，均覆盖正/反斜杠
-	const driveLower = (s: string) => (s.length > 1 && s[1] === ':' ? s[0].toLowerCase() + s.slice(1) : s);
-	const variants =
-		process.platform === 'win32'
-			? [driveLower(extensionPath), driveLower(fwd), extensionPath.toLowerCase(), fwd.toLowerCase()]
-			: [extensionPath, fwd];
-	for (const variant of variants) {
-		ids.add(hashToExtensionId(crypto.createHash('sha256').update(variant, 'utf8').digest()));
-	}
-	return [...ids];
-}
-
-/**
- * 验证脚本管理器拓展（油猴/脚本猫等应用中心扩展）已加载。
- * 通过检测拓展的 service worker 是否运行来判断（MV3 拓展必有 service worker），
- * 且 SW 的扩展 ID 必须匹配按路径推导的本次加载扩展之一——
- * 避免任意其他带 SW 的扩展让检查"假通过"。
- * 不读取 chrome://extensions/ 的 DOM--其页面结构随 Chrome 版本频繁变化，不稳定；
- * service worker 检测不依赖页面结构，更长久可靠。
- * 注意：开发者模式关闭时，通过 --load-extension 侧载的拓展会被 Chrome 禁用，
- * 其 service worker 不会运行，因此 service worker 存在也间接确认了开发者模式已开启。
- */
-async function verifyExtensionsLoaded(browser: BrowserContext, extensionPaths: string[]) {
-	// 期望 ID（候选集：manifest key 公钥推导 + 路径推导各规范化变体）-> 扩展路径，用于匹配 SW 并输出可读日志
-	const expectedIds = new Map<string, string>();
-	for (const p of extensionPaths) {
-		for (const id of computeExtensionIdCandidates(p)) {
-			expectedIds.set(id, p);
-		}
-	}
-
-	const findSw = () => {
-		const all = browser.serviceWorkers().filter((s) => /chrome-extension:\/\//.test(s.url()));
-		const matched = all.find((s) => expectedIds.has(new URL(s.url()).host));
-		return { all, matched };
-	};
-
-	// 拓展 service worker 可能在启动后短暂延迟才注册，轮询等待
-	const timeout = 15 * 1000;
-	const end = Date.now() + timeout;
-	let { all, matched } = findSw();
-	while (!matched && Date.now() < end) {
-		await sleep(500);
-		({ all, matched } = findSw());
-	}
-
-	if (matched) {
-		const id = new URL(matched.url()).host;
-		console.log(
-			'脚本管理器拓展加载检测通过（service worker）：',
-			path.basename(expectedIds.get(id) || ''),
-			matched.url()
-		);
-		return;
-	}
-
-	if (all.length > 0) {
-		// 存在其他扩展 SW 但未匹配到应用中心扩展：
-		// 可能是特殊环境下 ID 推导不一致（符号链接/短路径），降级为放行并告警，避免误判导致无法启动
-		console.warn(
-			'检测到扩展 service worker，但未能匹配应用中心扩展，按已加载放行：',
-			all.map((s) => s.url()).join('、')
-		);
-		return;
-	}
-
-	throw new Error(
-		ScriptWorker.lang(
-			'error_when_extension_not_found',
-			'未检测到脚本管理器拓展（油猴/脚本猫）的 service worker，请前往应用中心安装或检查开发者模式是否开启。'
-		)
-	);
-}
 function getExtensionName(filepath: string) {
 	return filepath.toLocaleLowerCase().includes('tampermonkey')
 		? '油猴'

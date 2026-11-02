@@ -112,6 +112,25 @@ export interface RemoteMethods extends QuestionRemoteMethods {
 	getValidBrowsers: typeof getValidBrowsers;
 	getBrowserMajorVersion: (executablePath: string) => number | undefined;
 	getExtensionPaths: (extensionsFolder: string) => string[];
+	/**
+	 * 内置拓展完整性校验（asar 内官方清单为基准）：
+	 * 仅处理已释放的拓展，快检 → 全量哈希 → 不符自动从 asar 重释放；
+	 * 未安装的拓展为 skipped（按需安装，不强制释放）。
+	 */
+	ensureBuiltinExtensionsIntegrity: () => Promise<
+		{ id: string; status: 'ok' | 'repaired' | 'skipped' | 'failed'; error?: string }[]
+	>;
+	/** 按需从 asar 释放指定内置拓展（环境补全/应用中心切换脚本管理器），返回拓展目录 */
+	installBundledExtension: (id: string) => Promise<string>;
+	/** 内置拓展清单（构建期官方渠道获取并钉哈希，随 App 发版更新） */
+	getBundledExtensions: () => {
+		id: string;
+		name: string;
+		version: string;
+		license: string;
+		sourceUrl: string;
+		homepage: string;
+	}[];
 	/** 下载并安装内置浏览器，返回安装完成后的可执行文件路径 */
 	installBuiltinChrome: () => Promise<string>;
 	exportExcel: (excel: { sheetName: string; list: any[] }[], filename: string) => void;
@@ -135,6 +154,8 @@ export interface RemoteMethods extends QuestionRemoteMethods {
 	getServerToken: () => string;
 	/** 获取 Linux 密钥环后端（basic_text = 无密钥环）；非 Linux 返回 undefined */
 	getStorageBackend: () => string | undefined;
+	/** 获取主进程真实显示环境变量（Linux 沙箱会清理渲染进程 env 导致 DISPLAY 丢失，fork worker 前需取回） */
+	getDisplayEnv: () => Record<string, string>;
 	isDirectory: (path: string) => boolean;
 	/** 本地 OCR 识别模块是否可用（启动前环境检测：needOCR 的自动化程序依赖） */
 	canOCR: () => boolean;

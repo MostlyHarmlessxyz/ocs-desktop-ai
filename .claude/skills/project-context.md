@@ -426,8 +426,7 @@ pnpm install
 # 开发（Electron Vite 同时启动 Web 和主进程，共享代码从源码编译）
 pnpm dev
 
-# 仅 Web 开发服务器 (http://localhost:3000)
-pnpm --filter @ocs-desktop/web dev
+# 启动后可在 http://localhost:3000 预览 Web 界面
 
 # 构建
 pnpm build      # 类型检查 → Electron Vite → Electron Builder

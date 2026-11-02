@@ -1,3 +1,137 @@
+# Changelog
+
+## [3.8.0](https://github.com/ocsjs/ocs-desktop/compare/v3.7.0...v3.8.0) (2026-10-31)
+
+
+### ✨ 新功能
+
+* **setting:** 脚本配置界面改为侧边栏 + 手风琴左右布局 ([743c136](https://github.com/ocsjs/ocs-desktop/commit/743c1363f042a0ff90b5e13cb44688647ea837c3))
+* **web:** 浏览器面板改为抽屉并优化布局 ([ca2024a](https://github.com/ocsjs/ocs-desktop/commit/ca2024a954d98effe1305f2961da2d36366be5ad))
+* 内置拓展随包分发体系（钉值构建 + asar 释放 + 完整性校验 + 下载兜底） ([aed2e93](https://github.com/ocsjs/ocs-desktop/commit/aed2e9356a184570182299fa36eaf9af1054c8e7))
+* 拓展启动链路加固与脚本安装页精确定位 ([dbb3609](https://github.com/ocsjs/ocs-desktop/commit/dbb360976eb214b0166d6545a85edd2bcaf0d1bf))
+* 系统自动化程序框架与静态流程迁移 ([e75def0](https://github.com/ocsjs/ocs-desktop/commit/e75def0b65cc923f2487924e4a8a871812f98395))
+* 脚本列表前端优化（启用状态语义 / 同名检测 / 同步提示） ([895e8fe](https://github.com/ocsjs/ocs-desktop/commit/895e8fec7a06ae42e6c576af1053013b61bd9a83))
+* 脚本列表双向同步（删除/停用状态对齐脚本管理器） ([b460b80](https://github.com/ocsjs/ocs-desktop/commit/b460b805d5ee1b6a7ddbba3df6b19665931c2453))
+* 资源监控浮层 tooltip 数值明细，设置项简化 ([1013c0b](https://github.com/ocsjs/ocs-desktop/commit/1013c0b200ed9e80e72a2385289eb3eb8f6e04b1))
+
+
+### 🐛 问题修复
+
+* **linux:** deb 依赖兼容 t64 变体，更新提示与自动重启适配 ([531a615](https://github.com/ocsjs/ocs-desktop/commit/531a6159f7942707421e836982c25ecc09b9f887))
+* 脚本下载与安装链路修复（URL 归一化 / 离线降级 / 损坏条目修复） ([4a1b9b9](https://github.com/ocsjs/ocs-desktop/commit/4a1b9b9e5590a84b2d9826e799f6aba272354b06))
+* 远程请求默认 15s 超时，避免 TCP 挂起等待系统级超时 ([07a7f5a](https://github.com/ocsjs/ocs-desktop/commit/07a7f5a7fb966c1d7b856cb7e4880293ac8c71d0))
+* 适配脚本猫 API 结构变更，修复脚本搜索安装全部失效 ([f0d3dec](https://github.com/ocsjs/ocs-desktop/commit/f0d3decab7657754953ad8e067be10bafbbab46d))
+
+## [3.7.0](https://github.com/ocsjs/ocs-desktop/compare/v3.6.0...v3.7.0) (2026-10-30)
+
+
+### ✨ 新功能
+
+* **setting:** 脚本配置界面改为手风琴面板展示 ([7bf3180](https://github.com/ocsjs/ocs-desktop/commit/7bf31804bf458de7f1b991e3486490214271b73e))
+* 启用 asar 打包（历史禁用原因已失效） ([57729c0](https://github.com/ocsjs/ocs-desktop/commit/57729c00b4a9f77682c5f0f3e4cb5e3c978fd10d))
+* 浏览器启动预检测（内存/CPU）与批量启动智能拦截 ([8e90844](https://github.com/ocsjs/ocs-desktop/commit/8e908441f88ae0fe0ad108971ae14df13109f046))
+* 浏览器资源实测统计、右下角监控浮层与内存/资源设置开关 ([1a4990c](https://github.com/ocsjs/ocs-desktop/commit/1a4990c5ad4b49014eb09a03937eba003be0ac6f))
+
+
+### 🐛 问题修复
+
+* **linux:** 修复打包版浏览器启动失败与 deb 打包问题 ([c1511d1](https://github.com/ocsjs/ocs-desktop/commit/c1511d1b8a55ea08e827099f697acf3166d1336b))
+* **title:** 修复标题栏下拉菜单 hover 展开延迟 ([3657af2](https://github.com/ocsjs/ocs-desktop/commit/3657af294ea646ed8a4c36cf4ca7b1c7e055ee55))
+* 点击 SVG 图标出现浏览器默认焦点框（Linux 下呈黄色描边） ([4895bc1](https://github.com/ocsjs/ocs-desktop/commit/4895bc16d511d0a29bf0985b9d0c157ff14a0aa7))
+
+
+### ⚡ 性能优化
+
+* 优化简洁模式浏览器操作简介 ([6d437d0](https://github.com/ocsjs/ocs-desktop/commit/6d437d0c90ca538985aba05e4d6d465f067f1552))
+* 优化系统资源统计监控浮层文案 ([202485d](https://github.com/ocsjs/ocs-desktop/commit/202485dc75e3c5e1746939eb7773ede3369b8b73))
+
+
+### ♻️ 重构
+
+* t 函数迁移至 utils/langs.ts，新增 t.html 净化变体防 XSS ([617a733](https://github.com/ocsjs/ocs-desktop/commit/617a73365c3e931c19b7893ed9a1e099452f7563))
+* 简洁/专业模式切换按钮改为纯图标 + tooltip ([582da96](https://github.com/ocsjs/ocs-desktop/commit/582da96816caed020a2ec2fd911f3d3b3dadbf02))
+* 软件路径与重置设置迁移至开发者界面，浏览器增强文案接入语言包 ([e2a62e6](https://github.com/ocsjs/ocs-desktop/commit/e2a62e6567d4ccb009fa7c3ec01c9b8ddbcfe6f6))
+
+## [3.6.0](https://github.com/ocsjs/ocs-desktop/compare/v3.5.0...v3.6.0) (2026-10-28)
+
+
+### ✨ 新功能
+
+* 图标体系统一为 Lucide（lucide-vue-next），获得组件级导入与代码补全 ([d1270a7](https://github.com/ocsjs/ocs-desktop/commit/d1270a7725c0e17ecc41461ebe5f77bee0720f1e))
+* 新手引导完成步骤显示绿色打勾图标，文案改为「环境自动准备」 ([6251dcd](https://github.com/ocsjs/ocs-desktop/commit/6251dcdb44f3b43805a310189090dbb38022da52))
+* 环境系统被动化重构——启动浏览器时自动检测补全，移除主动初始化焦虑入口 ([c69a8ad](https://github.com/ocsjs/ocs-desktop/commit/c69a8adb113e3b3d97c0937a91ace81692ccfe6e))
+
+
+### 🐛 问题修复
+
+* **linux:** 纯 Wayland 环境下内置浏览器无法启动 ([b54c596](https://github.com/ocsjs/ocs-desktop/commit/b54c596c24ed7759449725632aa80edb489fb049))
+* 修正 CHANGELOG 版本段落顺序并补回 H1 标题 ([52bc8ed](https://github.com/ocsjs/ocs-desktop/commit/52bc8ed1cd2a607f956ab106bf9fb02ec8601fb5))
+* 移除无用vite构建文件，防止图标被误删除 ([3c5c22c](https://github.com/ocsjs/ocs-desktop/commit/3c5c22c7c4052cd703c64846e98c1ebe7337b90e))
+
+
+### ⚡ 性能优化
+
+* 优化新建浏览器卡片文案 ([8b0319c](https://github.com/ocsjs/ocs-desktop/commit/8b0319c90fccedcaabd6616490a18bc0e7f4aca3))
+* 更新日志弹窗切换为与 electron-updater 同源的 CHANGELOG.md，弹窗标题居中统一样式 ([da2c1b4](https://github.com/ocsjs/ocs-desktop/commit/da2c1b4b3a6f87b7fef487e5a34dbab2a47110cd))
+
+
+### 💄 样式更新
+
+* 优化设置侧边栏宽度 ([b5bc9ae](https://github.com/ocsjs/ocs-desktop/commit/b5bc9ae44848b5d83cbf4c3e90f004f42e3899aa))
+
+## [3.5.0](https://github.com/ocsjs/ocs-desktop/compare/v3.4.1...v3.5.0) (2026-10-27)
+
+
+### ✨ 新功能
+
+* **ci:** 统一安装包存储到单一更新目录，消除重复上传与双倍存储 ([0e6f0ed](https://github.com/ocsjs/ocs-desktop/commit/0e6f0ed4132811a3740b12ccf6d8cb562b7e49eb))
+* **linux:** 升级 Electron 43，无边框不透明窗口实现原生圆角与系统阴影 ([77c7237](https://github.com/ocsjs/ocs-desktop/commit/77c723753abca3ddb10aa9f82f0ef348776e044d))
+
+## [3.5.0](https://github.com/ocsjs/ocs-desktop/compare/v3.4.1...v3.5.0) (2026-10-27)
+
+
+### ✨ 新功能
+
+* **ci:** 统一安装包存储到单一更新目录，消除重复上传与双倍存储 ([0e6f0ed](https://github.com/ocsjs/ocs-desktop/commit/0e6f0ed4132811a3740b12ccf6d8cb562b7e49eb))
+* **linux:** 升级 Electron 43，无边框不透明窗口实现原生圆角与系统阴影 ([77c7237](https://github.com/ocsjs/ocs-desktop/commit/77c723753abca3ddb10aa9f82f0ef348776e044d))
+
+## [3.4.1](https://github.com/ocsjs/ocs-desktop/compare/v3.4.0...v3.4.1) (2026-10-27)
+
+
+### 🐛 问题修复
+
+* **linux:** 窗口增加外阴影与边距，修复白色背景下边缘无法分辨 ([f204fd2](https://github.com/ocsjs/ocs-desktop/commit/f204fd22095e58c6e412cb40bfe4c27089879ee8))
+
+
+### 💄 样式更新
+
+* 优化更新进度条、和更新日志显示样式 ([875ac9c](https://github.com/ocsjs/ocs-desktop/commit/875ac9c0767efcfd3ae8ec46a3520a045d9ebc7e))
+* 归一化 ipc.ts/notify.ts 格式（prettier） ([2037ac3](https://github.com/ocsjs/ocs-desktop/commit/2037ac300b3f643ce4377964d3d065f9d968e960))
+
+## [3.4.0](https://github.com/ocsjs/ocs-desktop/compare/v3.3.0...v3.4.0) (2026-10-25)
+
+
+### ✨ Features
+
+* 发布闸门嵌回 build.yml 内嵌审批，独立工作流降为补发通道 ([4f3734f](https://github.com/ocsjs/ocs-desktop/commit/4f3734f50d1ea06ed55bac3c91b294eea3d085fa))
+
+
+### 🐛 Bug Fixes
+
+* 发布闸门 gh 调用补 --repo 参数 ([a310e12](https://github.com/ocsjs/ocs-desktop/commit/a310e1200772e9bc4f75d9d4b920b0dc3b9eff06))
+
+## [3.3.0](https://github.com/ocsjs/ocs-desktop/compare/v3.2.0...v3.3.0) (2026-10-25)
+
+
+### ✨ Features
+
+* 发布闸门改为独立手动触发工作流 publish-update.yml ([c7304f1](https://github.com/ocsjs/ocs-desktop/commit/c7304f1bf76bd6e85875f4f2b145c4c28702b261))
+
+
+### 🐛 Bug Fixes
+
+* 修正 CHANGELOG 版本段落顺序 ([c9ffde9](https://github.com/ocsjs/ocs-desktop/commit/c9ffde9a672209bc2fccbce78e98a3e9cbe2c928))
+
 ## [3.2.0](https://github.com/ocsjs/ocs-desktop/compare/v3.1.0...v3.2.0) (2026-10-25)
 
 
@@ -25,30 +159,6 @@
 ### ♻️ Refactoring
 
 * 解压主体换用 extract-zip，移除 unzipper ([6b7a71b](https://github.com/ocsjs/ocs-desktop/commit/6b7a71be75b1653cace8d22fbf44ca01009796b2))
-
-## [3.4.0](https://github.com/ocsjs/ocs-desktop/compare/v3.3.0...v3.4.0) (2026-10-25)
-
-
-### ✨ Features
-
-* 发布闸门嵌回 build.yml 内嵌审批，独立工作流降为补发通道 ([4f3734f](https://github.com/ocsjs/ocs-desktop/commit/4f3734f50d1ea06ed55bac3c91b294eea3d085fa))
-
-
-### 🐛 Bug Fixes
-
-* 发布闸门 gh 调用补 --repo 参数 ([a310e12](https://github.com/ocsjs/ocs-desktop/commit/a310e1200772e9bc4f75d9d4b920b0dc3b9eff06))
-
-## [3.3.0](https://github.com/ocsjs/ocs-desktop/compare/v3.2.0...v3.3.0) (2026-10-25)
-
-
-### ✨ Features
-
-* 发布闸门改为独立手动触发工作流 publish-update.yml ([c7304f1](https://github.com/ocsjs/ocs-desktop/commit/c7304f1bf76bd6e85875f4f2b145c4c28702b261))
-
-
-### 🐛 Bug Fixes
-
-* 修正 CHANGELOG 版本段落顺序 ([c9ffde9](https://github.com/ocsjs/ocs-desktop/commit/c9ffde9a672209bc2fccbce78e98a3e9cbe2c928))
 
 ## [3.1.0](https://github.com/ocsjs/ocs-desktop/compare/v3.0.1...v3.1.0) (2026-10-22)
 
