@@ -1,3 +1,4 @@
 # 初始化项目
 
-开发时需要在 web 项目中 `npm run build` 打包一次，否则会导致浏览器启动后 OCS 导航页无法访问。
+在仓库根目录运行 `pnpm dev`，Electron Vite 会同时启动主进程和 Web 开发服务器。
+Linux 可运行产物使用 `pnpm build:linux` 构建，随后通过根目录的 `./ocs` 启动。

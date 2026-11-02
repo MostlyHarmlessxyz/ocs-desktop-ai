@@ -1,7 +1,6 @@
 import http from 'http';
 import { randomUUID } from 'crypto';
 import type { BrowserContext, Frame, Page } from 'playwright-core';
-import { captureQuestion, QuestionCaptureRequest } from './capture';
 
 export interface QuestionBridgeSession {
 	port: number;
@@ -112,7 +111,6 @@ export async function installQuestionBinding(
 ): Promise<() => Promise<void>> {
 	if (!session?.token) return async () => {};
 	const states = new Map<Frame, FrameState>();
-	const captureQueues = new WeakMap<Page, Promise<void>>();
 	const cleanups: Array<() => void> = [];
 	let closing = false;
 	const disconnect = async (frame: Frame) => {
@@ -154,7 +152,7 @@ export async function installQuestionBinding(
 		) {
 			throw new Error('当前页面无法使用智能搜题桥接');
 		}
-		if (!['begin', 'complete', 'status', 'decision', 'decisions', 'capture'].includes(String(operation)))
+		if (!['begin', 'complete', 'status', 'decision', 'decisions'].includes(String(operation)))
 			throw new Error('不支持的智能搜题操作');
 		let state = states.get(frame);
 		if (!state) {
@@ -162,38 +160,6 @@ export async function installQuestionBinding(
 			states.set(frame, state);
 		}
 		if (!state.active || state.url !== frame.url()) throw new Error('题目页面已变化');
-		if (operation === 'capture') {
-			const current = state;
-			let expired = false;
-			let timer: ReturnType<typeof setTimeout>;
-			const timeout = new Promise<never>((resolve, reject) => {
-				timer = setTimeout(() => {
-					expired = true;
-					reject(new Error('题目采集排队超时，请稍后重新搜题'));
-				}, 30000);
-			});
-			const pending = (captureQueues.get(page) || Promise.resolve()).then(() => {
-				if (expired) throw new Error('题目采集请求已过期');
-				if (closing || !current.active || current.url !== frame.url()) throw new Error('题目页面已变化');
-				return captureQuestion(
-					frame,
-					data as QuestionCaptureRequest,
-					() => !expired && !closing && current.active && current.url === frame.url()
-				);
-			});
-			captureQueues.set(
-				page,
-				pending.then(
-					() => {},
-					() => {}
-				)
-			);
-			try {
-				return await Promise.race([pending, timeout]);
-			} finally {
-				clearTimeout(timer!);
-			}
-		}
 		if (operation === 'decisions') {
 			const current = state;
 			if (

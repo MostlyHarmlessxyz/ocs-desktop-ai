@@ -423,22 +423,23 @@ Folder (root)
 corepack enable
 pnpm install
 
-# 开发（同时启动 common 编译 + Web 开发服务器 + Electron 主进程）
+# 开发（Electron Vite 同时启动 Web 和主进程，共享代码从源码编译）
 pnpm dev
 
-# 单独运行
-pnpm dev:web    # 仅 Web 开发服务器 (http://localhost:3000)
-pnpm dev:app    # 仅 Electron 主进程
+# 仅 Web 开发服务器 (http://localhost:3000)
+pnpm --filter @ocs-desktop/web dev
 
 # 构建
-pnpm build      # 完整构建（TSC → Gulp 打包 → Electron Builder）
+pnpm build      # 类型检查 → Electron Vite → Electron Builder
+pnpm build:linux # Linux 构建并更新 ./ocs 启动入口
 
 # 代码检查
-pnpm lint       # ESLint + Prettier 格式化
-pnpm format     # 仅 Prettier 格式化
+pnpm lint       # ESLint + Prettier 检查
+pnpm lint:fix   # ESLint + Prettier 自动修复
 
 # 类型检查
-pnpm tsc        # lint + TSC 类型检查
+pnpm typecheck  # common、主进程 TSC 和 Vue 类型检查
+pnpm test       # common 和 app 回归测试
 ```
 
 ---

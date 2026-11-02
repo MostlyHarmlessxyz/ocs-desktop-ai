@@ -15,7 +15,7 @@
 			v-if="task.input.contentMode === 'visual'"
 			type="info"
 		>
-			题目按页面原始字形截图识别。请查看下方题干和选项图片。
+			这是旧版生成的截图题目记录。新版搜题直接读取文字和原题图片。
 		</a-alert>
 		<div
 			v-if="task.input.images?.length"

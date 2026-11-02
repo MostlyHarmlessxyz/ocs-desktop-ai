@@ -80,4 +80,17 @@ describe('答案按题型规范化', () => {
 			normalizeQuestion({ ...single, sourceUrl: 'https://mooc1.chaoxing.com/exam-ans/exam/test' }).formalExam
 		).toBe(true);
 	});
+	it('规范化旧版 visual 输入时保留原图及标签供历史处理', () => {
+		const visual = normalizeQuestion({
+			question: '旧版题目',
+			type: 'single',
+			options: ['字体占位 A', '字体占位 B'],
+			contentMode: 'visual',
+			imageLabels: ['题干', '选项'],
+			images: ['data:image/png;base64,aGVsbG8=', 'https://example.com/options.png']
+		});
+		expect(visual).toMatchObject({ contentMode: 'visual', imageLabels: ['题干', '选项'] });
+		expect(visual.images).toEqual(['data:image/png;base64,aGVsbG8=', 'https://example.com/options.png']);
+		expect(normalizeAnswer(['B'], visual)).toEqual({ kind: 'single', index: 1 });
+	});
 });

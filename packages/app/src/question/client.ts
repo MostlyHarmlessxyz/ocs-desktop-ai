@@ -25,6 +25,7 @@ export function answerSchema(input: QuestionInput) {
 	const select =
 		input.type === 'single' ||
 		input.type === 'multiple' ||
+		// Legacy: visual mode is no longer created since v3.4.0, preserved for historical task records
 		(input.type === 'judgement' && input.contentMode === 'visual');
 	const choices = select ? labels : input.type === 'judgement' ? ['正确', '错误'] : undefined;
 	const blankCount = ['completion', 'fill-blank'].includes(input.type || '') ? input.options.length : 0;

@@ -59,7 +59,7 @@ export function patchQuestionScript(original: string, runtimeSource: string): st
 			'    const __ocsAIContext = env.ocs_question_context; delete env.ocs_question_context;\n' +
 			`    const __ocsAISession = await ${runtime}.begin(env, __ocsAIContext);\n` +
 			'    answererWrappers = answererWrappers || [];\n' +
-			'    if (__ocsAISession.strategy === "model-only" || __ocsAISession.input.contentMode === "visual") answererWrappers = [];'
+			'    if (__ocsAISession.strategy === "model-only") answererWrappers = [];'
 	);
 	source = edit(
 		source,
@@ -93,6 +93,18 @@ export function patchQuestionScript(original: string, runtimeSource: string): st
 	const workerEnd = source.indexOf('  class CustomOCSWorker extends ', workerStart);
 	if (workerStart < 0 || workerEnd < 0) throw new Error('OCS Worker 边界无法确认');
 	let worker = source.slice(workerStart, workerEnd);
+	worker = edit(
+		worker,
+		'    async doWork(options) {',
+		'    async doWork(options) {\n' +
+			'      const __ocsDocs = typeof this.opts.root === "string" ? [document] : Array.from(this.opts.root || [], root => root.ownerDocument);\n' +
+			'      for (const doc of new Set(__ocsDocs)) {\n' +
+			'        if (doc && doc.querySelector(".font-cxsecret")) {\n' +
+			'          try { await mappingRecognize(doc); }\n' +
+			'          catch (error) { lib.$message.error({ content: String(error), duration: 0 }); throw error; }\n' +
+			'        }\n' +
+			'      }'
+	);
 	worker = edit(
 		worker,
 		/^([ \t]*)ctx\.searchInfos = \[\];$/m,
@@ -172,13 +184,7 @@ export function patchQuestionScript(original: string, runtimeSource: string): st
 			13
 		);
 	}
-	// Keep the real page and its original custom font intact. Approximate glyph
-	// matching must not overwrite the text the user can already read correctly.
-	source = edit(
-		source,
-		/async function mappingRecognize\(([^)]*)\) \{/,
-		'$&\n    return; /* OCS AI preserves original custom-font rendering. */'
-	);
+	source = patchFontConversion(source, version);
 
 	// Assignment preview and chapter-test callbacks are different paths in OCS and are adapted separately.
 	source = edit(
@@ -218,7 +224,69 @@ export function patchQuestionScript(original: string, runtimeSource: string): st
 	return source;
 }
 
+function patchFontConversion(source: string, version: keyof typeof adapters) {
+	source = edit(
+		source,
+		'  async function mappingRecognize(doc = document) {',
+		'  function mappingRecognize(doc = document) {\n' +
+			`    return ${runtime}.decodeFonts(doc, () => __ocsNativeMappingRecognize(doc));\n  }\n` +
+			'  async function __ocsNativeMappingRecognize(doc = document) {'
+	);
+	const start = source.indexOf('  async function __ocsNativeMappingRecognize(');
+	const end = source.indexOf('  const CXAnalyses', start);
+	if (end < start) throw new Error('OCS 字体转换边界无法确认');
+	let native = source.slice(start, end);
+	native = edit(
+		native,
+		'const fonts = CXAnalyses.getSecretFont(doc);',
+		'const fonts = CXAnalyses.getSecretFont(doc);\n' +
+			'      const __ocsFontContainers = Array.from(doc.querySelectorAll(".font-cxsecret"));'
+	);
+	if (version === '4.13.16') {
+		// Replace text once; rewriting innerHTML can remap output characters and replace live form controls.
+		native = edit(
+			native,
+			/fonts\.forEach\(\(el, index\) => \{[\s\S]*?el\.classList\.remove\("font-cxsecret"\);\n\s*\}\);/,
+			'for (const el of fonts) {\n' +
+				'          for (const ch of el.textContent || "") {\n' +
+				'            const code = ch.charCodeAt(0);\n' +
+				'            if (Object.prototype.hasOwnProperty.call(match, code) && match[code] === void 0) throw new Error("OCS 字库缺少当前字形，请刷新字库后重试");\n' +
+				'          }\n' +
+				'        }\n' +
+				'        for (const el of fonts) {\n' +
+				'          const walker = doc.createTreeWalker(el, 4);\n' +
+				'          let node;\n' +
+				'          while ((node = walker.nextNode())) node.nodeValue = [...(node.nodeValue || "")].map(ch => {\n' +
+				'            const value = match[ch.charCodeAt(0)];\n' +
+				'            return value === void 0 ? ch : String.fromCharCode(value);\n' +
+				'          }).join("");\n' +
+				'        }'
+		);
+	}
+	const success =
+		version === '5.2.3'
+			? '$console.info("文字解密完成，耗时 " + ((Date.now() - t2) / 1e3).toFixed(1) + " 秒");'
+			: '$console.log("识别繁体字完成。");';
+	native = edit(native, success, success + '\n      return __ocsFontContainers;');
+	source = source.slice(0, start) + native + source.slice(end);
+	return edit(
+		source,
+		'        return after === null ? font : after;\n      });',
+		'        return after === null ? font : after;\n' +
+			'      }).filter((el, index, all) => all.indexOf(el) === index && !all.some(parent => parent !== el && parent.contains(el)));'
+	);
+}
+
 function patchFiveImageAndPrechecks(source: string): string {
+	// Supply lazy images upstream so an explicit empty image list stays authoritative.
+	source = edit(
+		source,
+		'        const url = img.src;',
+		'        const url = [img.currentSrc, img.getAttribute("src"), img.getAttribute("data-src"), img.getAttribute("data-original")]\n' +
+			'          .filter(value => value && value.trim() && !value.trim().startsWith("#"))\n' +
+			'          .map(value => { try { return new URL(value.trim(), img.baseURI).href; } catch { return ""; } })\n' +
+			'          .find(value => /^(https?:|data:|blob:)/.test(value) && value.split("#")[0] !== img.ownerDocument.URL.split("#")[0]);'
+	);
 	// 5.x added an iframe-only precheck, a second Chaoxing work handler, and a new MOOC chapter UI.
 	source = edit(
 		source,

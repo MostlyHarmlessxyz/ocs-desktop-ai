@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { CodexPool, executeCodex, parseAnswer, answerSchema } from '../src/question/client';
+import { CodexPool, executeCodex, parseAnswer, answerSchema, prompt } from '../src/question/client';
 import { invocation, QuestionConfiguration, modelCatalog } from '../src/question/config';
 import type { QuestionCall } from '@ocs-desktop/common';
 
@@ -36,6 +36,16 @@ describe('Codex 参数与严格输出', () => {
 			type: 'string',
 			enum: ['A', 'B']
 		});
+	});
+	it('keeps legacy visual answer identifiers and image-reading instructions', () => {
+		const legacy = {
+			...input,
+			contentMode: 'visual' as const,
+			imageLabels: ['题目原图'],
+			images: ['data:image/png;base64,aGVsbG8=']
+		};
+		expect(parseAnswer('{"answer":["B"],"explanation":"按原图判断"}', legacy).answer).toEqual(['B']);
+		expect(prompt(legacy)).toContain('附件保留了页面原始字形');
 	});
 	it.each(['completion', 'fill-blank'])(
 		'requires exactly one answer per %s field without choice-letter constraints',

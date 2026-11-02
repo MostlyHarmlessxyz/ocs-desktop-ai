@@ -69,7 +69,11 @@ afterEach(() => {
 	cleanup.splice(0).forEach((fn) => fn());
 });
 
-function page(html = '', decisions: any = {}, url = 'https://mooc1.chaoxing.com/work/doHomeWorkNew') {
+function page(
+	html = '<div class="questionLi"></div>',
+	decisions: any = {},
+	url = 'https://mooc1.chaoxing.com/work/doHomeWorkNew'
+) {
 	const window = browserEnv([], { url, pretendToBeVisual: true });
 	window.document.body.innerHTML = html;
 	const calls: any[] = [];
@@ -110,6 +114,7 @@ function page(html = '', decisions: any = {}, url = 'https://mooc1.chaoxing.com/
 		clearInterval,
 		URL,
 		Node: window.Node,
+		NodeFilter: window.NodeFilter,
 		Event: window.Event,
 		FileReader: window.FileReader,
 		Blob: window.Blob,
@@ -123,6 +128,21 @@ function page(html = '', decisions: any = {}, url = 'https://mooc1.chaoxing.com/
 		window.close();
 	});
 	return { window, runtime: (context as any).__ocsAIRuntime, calls, decisions, context };
+}
+
+function questionContext(
+	fixture: ReturnType<typeof page>,
+	root = fixture.window.document.querySelector('.questionLi,.TiMu,#root')
+) {
+	expect(root).not.toBeNull();
+	const options = [...root.querySelectorAll('.answer_p,.blank')];
+	return {
+		root,
+		elements: {
+			title: [...root.querySelectorAll('.title,.mark_name')],
+			options: options.length ? options : [...root.querySelectorAll('textarea,input[type=text]')]
+		}
+	};
 }
 
 /** Execute the actual patched upstream Worker/search/helper definitions, with browser UI services stubbed. */
@@ -152,7 +172,8 @@ function upstreamFive(fixture: ReturnType<typeof page>) {
 		section('  function createCommonAnswerer(', '  function workPreCheckMessage(')
 	].join('\n');
 	return new vm.Script(
-		definitions + '\n({ Worker: OCSWorker, answerer: createCommonAnswerer, build: buildAnswererEnv })'
+		definitions +
+			'\n({ Worker: OCSWorker, answerer: createCommonAnswerer, build: buildAnswererEnv, extract: extractTextWithImages })'
 	).runInContext(fixture.context);
 }
 
@@ -166,10 +187,14 @@ function fiveWorker(fixture: ReturnType<typeof page>, type: string, extra: any =
 		thread: 1,
 		answerSeparators: ['#'],
 		answerer: upstream.answerer({
-			titleTransform: (elements: any) => elements.title[0].textContent,
+			titleTransform: (elements: any) => upstream.extract(elements.title[0]),
 			optionsTransform: (elements: any, ctx: any) => {
 				ctx.type = type;
-				return elements.options.map((option: any) => option.textContent).join('\n');
+				const extracted = elements.options.map((option: any) => upstream.extract(option));
+				return {
+					text: extracted.map((entry: any) => entry.text).join('\n'),
+					images: extracted.flatMap((entry: any) => entry.images)
+				};
 			},
 			answererWrappers: [],
 			period: 0
@@ -190,6 +215,51 @@ function fiveWorker(fixture: ReturnType<typeof page>, type: string, extra: any =
 		worker.stopRootObserver();
 	});
 	return { worker, updates, initialized: () => initialized, upstream };
+}
+
+function fontAdapter(fixture: ReturnType<typeof page>, source = latest) {
+	const patched = patchQuestionScript(source, runtimeJS);
+	const start = patched.indexOf('  function mappingRecognize(');
+	const end = patched.indexOf('  const CXAnalyses', start);
+	const fontStart = patched.indexOf('    getSecretFont(doc = document)', end);
+	const fontEnd = patched.indexOf('    isCurrentChapterFinished()', fontStart);
+	let definitions = patched.slice(start, end) + '\nconst CXAnalyses = {' + patched.slice(fontStart, fontEnd) + '\n};';
+	if (source === latest) {
+		definitions += patched.slice(
+			patched.indexOf('  function decryptText('),
+			patched.indexOf('  function findFontUrls(')
+		);
+	}
+	fixture.window.document.head.innerHTML =
+		"<style>@font-face { font-family: font-cxsecret; src:url('data:font/ttf;base64,AA=='); }</style>";
+	fixture.window.typrMapping = { 19968: 19969, 19969: 19970 };
+	let decodes = 0;
+	Object.assign(fixture.context, {
+		$console: { log() {}, info() {}, warn() {}, error() {} },
+		top$1: fixture.window,
+		extractFontFromStyle: () => new ArrayBuffer(1),
+		CX_SECRET_REF_TABLE_URL: 'https://example.test/font.bin',
+		crackFont: async () => {
+			decodes++;
+			return { map: { 一: '丁', 丁: '丂' }, details: [] };
+		},
+		typr_js: {
+			parse: () => {
+				decodes++;
+				return {};
+			},
+			U: {
+				codeToGlyph: (_font: any, code: number) => (code === 19968 || code === 19969 ? code : 0),
+				glyphToPath: (_font: any, glyph: number) => ({ glyph })
+			}
+		},
+		md5: (value: string) => '0'.repeat(24) + JSON.parse(value).glyph
+	});
+	fixture.context.lib ||= {};
+	fixture.context.lib.$message ||= {};
+	fixture.context.lib.$message.error = () => {};
+	const recognize = new vm.Script(definitions + '\nmappingRecognize;').runInContext(fixture.context);
+	return { recognize: (doc = fixture.window.document) => recognize(doc), decodes: () => decodes };
 }
 
 describe('OCS 4.13.16 compatibility adapter', () => {
@@ -289,12 +359,15 @@ describe('OCS 5.2.3 version-specific adapter', () => {
 		expect(
 			(await upstream.build({ title: 'q', options: ['same', 'same'], enableImageOptimize: false })).env.options
 		).toBe('same\nsame');
-		const session = await fixture.runtime.begin({
-			title: 'multiline',
-			type: 'single',
-			options: 'line\none\nline\ntwo',
-			ocs_options: ['line\none', 'line\ntwo']
-		});
+		const session = await fixture.runtime.begin(
+			{
+				title: 'multiline',
+				type: 'single',
+				options: 'line\none\nline\ntwo',
+				ocs_options: ['line\none', 'line\ntwo']
+			},
+			questionContext(fixture)
+		);
 		expect(session.input.options).toEqual(['line\none', 'line\ntwo']);
 	});
 	it('uses optionText for image/formula choices and accepts upstream image data without redownloading it', async () => {
@@ -305,14 +378,17 @@ describe('OCS 5.2.3 version-specific adapter', () => {
 			}
 		);
 		const data = pngData;
-		const session = await fixture.runtime.begin({
-			title: 'image https://images.test/formula.png',
-			type: 'single',
-			options: 'formula',
-			images: [data],
-			ocs_image_sources: ['https://images.test/formula.png'],
-			ocs_required_images: ['https://images.test/formula.png']
-		});
+		const session = await fixture.runtime.begin(
+			{
+				title: 'image https://images.test/formula.png',
+				type: 'single',
+				options: 'formula',
+				images: [data],
+				ocs_image_sources: ['https://images.test/formula.png'],
+				ocs_required_images: ['https://images.test/formula.png']
+			},
+			questionContext(fixture)
+		);
 		expect(fixture.calls.find((call) => call.operation === 'begin').data.images).toEqual([data]);
 		const infos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('#root');
@@ -432,7 +508,10 @@ describe('question browser runtime', () => {
 			).join('')
 		);
 		for (const [index, root] of [...fixture.window.document.querySelectorAll('.questionLi')].entries()) {
-			const session = await fixture.runtime.begin({ title: 'Question ' + index, type: 'single', options: ['A'] });
+			const session = await fixture.runtime.begin(
+				{ title: 'Question ' + index, type: 'single', options: ['A'] },
+				questionContext(fixture, root)
+			);
 			const searchInfos = await fixture.runtime.finish(session, []);
 			await fixture.runtime
 				.resolver({ root, searchInfos })
@@ -450,7 +529,10 @@ describe('question browser runtime', () => {
 	});
 	it('serializes overlapping answer application for the same question', async () => {
 		const fixture = page('<div id="root"><label><input type="radio">A</label></div>');
-		const session = await fixture.runtime.begin({ title: 'One question', type: 'single', options: ['A'] });
+		const session = await fixture.runtime.begin(
+			{ title: 'One question', type: 'single', options: ['A'] },
+			questionContext(fixture)
+		);
 		const searchInfos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('#root');
 		const options = [...root.querySelectorAll('label')];
@@ -474,7 +556,10 @@ describe('question browser runtime', () => {
 				'<div class="answer_p">first</div></div><div class="choice"><span class="num_option">B</span>' +
 				'<div class="answer_p">second</div></div></div>'
 		);
-		const session = await fixture.runtime.begin({ title: 'Choice', options: ['first', 'second'], type: 'single' });
+		const session = await fixture.runtime.begin(
+			{ title: 'Choice', options: ['first', 'second'], type: 'single' },
+			questionContext(fixture)
+		);
 		const infos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('.questionLi');
 		let clicks = 0;
@@ -487,55 +572,164 @@ describe('question browser runtime', () => {
 		expect(result.finish).toBe(true);
 		expect(clicks).toBe(0);
 	});
-	it('preserves custom-font DOM and sends ordered visual parts instead of encrypted strings', async () => {
-		const fixture = page(
-			'<div class="questionLi"><div class="countdown">00:30</div>' +
-				'<h3 class="font-cxsecret">encrypted-stem</h3><div class="answer_p font-cxsecret">encrypted-a</div>' +
-				'<div class="answer_p font-cxsecret">encrypted-b</div></div>'
-		);
-		const root = fixture.window.document.querySelector('.questionLi');
-		const before = root.textContent;
-		let captures: any;
-		const originalBridge = fixture.window.__ocsQuestionBridge;
-		fixture.window.__ocsQuestionBridge = async (operation: string, data: any) => {
-			if (operation === 'capture') {
-				captures = data;
-				return { images: [pngData, pngData, pngData], imageLabels: data.parts.map((p: any) => p.label) };
-			}
-			return originalBridge(operation, data);
-		};
-		const session = await fixture.runtime.begin(
-			{ title: 'encrypted-stem', type: 'single' },
-			{
-				root,
-				type: 'single',
-				elements: {
-					title: [root.querySelector('h3'), root.querySelector('.countdown')],
-					options: [...root.querySelectorAll('.answer_p')]
-				}
-			}
-		);
-		expect(root.textContent).toBe(before);
-		expect(root.querySelectorAll('.font-cxsecret')).toHaveLength(3);
-		expect(captures.parts.map((p: any) => p.label)).toEqual(['题干 1', '选项 A', '选项 B']);
-		const input = fixture.calls.find((call) => call.operation === 'begin').data;
-		expect(input.contentMode).toBe('visual');
-		expect(input.question).not.toContain('encrypted');
-		expect(input.options).toEqual(['选项 A（见图片）', '选项 B（见图片）']);
-		await fixture.runtime.finish(session, [{ name: 'Unreliable bank', results: [{ answer: 'encrypted-a' }] }]);
-		expect(fixture.calls.find((call) => call.operation === 'complete').data.bankInfos).toEqual([]);
-	});
-	it('disables upstream destructive font rewriting for both supported bundles', async () => {
+	it('runs both native font converters once, clears parent font styles, and preserves form/image nodes', async () => {
 		for (const source of [original, latest]) {
-			const patched = patchQuestionScript(source, runtimeJS);
-			const start = patched.indexOf('  async function mappingRecognize(');
-			const end = patched.indexOf('  const CXAnalyses', start);
-			expect(start).toBeGreaterThan(0);
-			expect(end).toBeGreaterThan(start);
-			const fixture = page('<div class="font-cxsecret">original</div>');
-			await new vm.Script(patched.slice(start, end) + '\nmappingRecognize(document);').runInContext(fixture.context);
-			expect(fixture.window.document.querySelector('.font-cxsecret').textContent).toBe('original');
+			const fixture = page(
+				'<div class="font-cxsecret"><div class="after font-cxsecret"><span class="font-cxsecret">一丁</span><img src="/一.png" alt="一"><textarea></textarea></div></div>'
+			);
+			const image = fixture.window.document.querySelector('img');
+			const field = fixture.window.document.querySelector('textarea');
+			field.value = 'retained';
+			const native = fontAdapter(fixture, source);
+			await Promise.all([native.recognize(), native.recognize()]);
+			await native.recognize();
+			expect(native.decodes()).toBe(1);
+			expect(fixture.window.document.querySelector('span').textContent).toBe('丁丂');
+			expect(fixture.window.document.querySelector('.font-cxsecret')).toBeNull();
+			expect(fixture.window.document.querySelector('img')).toBe(image);
+			expect(image.getAttribute('src')).toBe('/一.png');
+			expect(field.value).toBe('retained');
 		}
+	});
+	it('waits for native font conversion before the real Worker extracts question text', async () => {
+		const fixture = page(
+			'<div class="questionLi"><h3 class="title font-cxsecret">一丁</h3><label class="answer_p"><input type="radio">A</label></div>'
+		);
+		const { worker } = fiveWorker(fixture, 'single');
+		fontAdapter(fixture);
+		let release!: (value: any) => void;
+		fixture.context.crackFont = () =>
+			new Promise((resolve) => {
+				release = resolve;
+			});
+		const pending = worker.doWork();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fixture.calls.some((call) => call.operation === 'begin')).toBe(false);
+		expect(worker.isRunning).toBe(false);
+		release({ map: { 一: '丁', 丁: '丂' }, details: [] });
+		expect((await pending)[0].result.finish).toBe(true);
+		const input = fixture.calls.find((call) => call.operation === 'begin').data;
+		expect(input.question).toBe('丁丂');
+		expect(input.images).toEqual([]);
+		expect(input.rootId).toBe(
+			fixture.window.document.querySelector('.questionLi').getAttribute('data-ocs-ai-question')
+		);
+	});
+	it('keeps encrypted text intact on font failure, shows recovery guidance and can retry the Worker', async () => {
+		const fixture = page(
+			'<div class="questionLi"><h3 class="title font-cxsecret">一丁</h3><label class="answer_p"><input type="radio">A</label></div>'
+		);
+		const { worker } = fiveWorker(fixture, 'single');
+		fontAdapter(fixture);
+		const errors: any[] = [];
+		fixture.context.lib.$message.error = (message: any) => errors.push(message);
+		fixture.context.crackFont = async () => {
+			throw new Error('font table unavailable');
+		};
+		await expect(worker.doWork()).rejects.toThrow('字体转换未完成');
+		expect(fixture.calls).toEqual([]);
+		expect(errors.some((error) => error.content?.includes('在课程页重新开始答题'))).toBe(true);
+		expect(fixture.window.document.querySelector('.font-cxsecret').textContent).toBe('一丁');
+		await expect(fixture.runtime.begin({ title: '一丁' }, questionContext(fixture))).rejects.toThrow(
+			'字体转换尚未启动但存在加密文字'
+		);
+		fixture.context.crackFont = async () => ({ map: { 一: '丁', 丁: '丂' }, details: [] });
+		expect((await worker.doWork())[0].result.finish).toBe(true);
+		expect(fixture.calls.find((call) => call.operation === 'begin').data.question).toBe('丁丂');
+	});
+	it('shares pending font conversion between concurrent question requests and rejects incomplete conversion', async () => {
+		const fixture = page(
+			'<div class="questionLi font-cxsecret">一</div><div class="questionLi font-cxsecret">丁</div>'
+		);
+		const roots = [...fixture.window.document.querySelectorAll('.questionLi')];
+		let release!: (roots: any[]) => void;
+		const conversion = fixture.runtime.decodeFonts(
+			fixture.window.document,
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				})
+		);
+		const pending = roots.map((root, index) =>
+			fixture.runtime.begin({ title: ['丁', '丂'][index] }, questionContext(fixture, root))
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fixture.calls).toEqual([]);
+		roots.forEach((root, index) => {
+			root.textContent = ['丁', '丂'][index];
+		});
+		release(roots);
+		await conversion;
+		expect((await Promise.all(pending)).map((session) => session.input.question)).toEqual(['丁', '丂']);
+		expect(fixture.calls.filter((call) => call.operation === 'begin')).toHaveLength(2);
+
+		roots[0].classList.add('font-cxsecret');
+		const incomplete = fixture.runtime.decodeFonts(fixture.window.document, async () => []);
+		await expect(fixture.runtime.begin({ title: '一' }, questionContext(fixture, roots[0]))).rejects.toThrow(
+			'仍存在加密文字'
+		);
+		await incomplete;
+		expect(fixture.calls.filter((call) => call.operation === 'begin')).toHaveLength(2);
+	});
+	it('shares native decoding with a multi-question Worker and extracts decoded text plus lazy images', async () => {
+		const fixture = page(
+			'<div class="questionLi"><h3 class="title font-cxsecret">一<img src="" data-src="/stem.png"></h3><label class="answer_p"><input type="radio">A</label></div>' +
+				'<div class="questionLi"><h3 class="title font-cxsecret">丁</h3><label class="answer_p"><input type="radio"><img data-original="/option.png">A</label></div>'
+		);
+		const { worker } = fiveWorker(fixture, 'single', { thread: 2 });
+		const native = fontAdapter(fixture);
+		let release!: (value: any) => void;
+		let decodes = 0;
+		fixture.context.crackFont = () => {
+			decodes++;
+			return new Promise((resolve) => {
+				release = resolve;
+			});
+		};
+		const requested: string[] = [];
+		fixture.context.fetch = async (url: string) => {
+			requested.push(url);
+			return { ok: true, blob: async () => new fixture.window.Blob([png]) };
+		};
+		const conversion = native.recognize();
+		const pending = worker.doWork();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(fixture.calls).toEqual([]);
+		expect(requested).toEqual([]);
+		release({ map: { 一: '丁', 丁: '丂' }, details: [] });
+		await conversion;
+		expect((await pending).every((result: any) => result.result.finish)).toBe(true);
+		expect(decodes).toBe(1);
+		const inputs = fixture.calls.filter((call) => call.operation === 'begin').map((call) => call.data);
+		expect(inputs.map((input) => input.question)).toEqual(['丁 https://mooc1.chaoxing.com/stem.png', '丂']);
+		expect(inputs.map((input) => input.images)).toEqual([[pngData], [pngData]]);
+		expect(requested.sort()).toEqual(['https://mooc1.chaoxing.com/option.png', 'https://mooc1.chaoxing.com/stem.png']);
+	});
+	it('decodes iframe roots in their own document and resolves image URLs against that document', async () => {
+		const fixture = page('<div class="font-cxsecret">Parent 一</div><iframe></iframe>');
+		const doc = fixture.window.document.querySelector('iframe').contentDocument;
+		doc.open();
+		doc.write(
+			'<html><head><base href="https://mooc1.chaoxing.com/nested/frame/test"></head><body><div class="questionLi"><h3 class="title font-cxsecret">一</h3><label class="answer_p"><input type="radio">A</label></div></body></html>'
+		);
+		doc.close();
+		const root = doc.querySelector('.questionLi');
+		const { worker } = fiveWorker(fixture, 'single', { root: [root] });
+		const native = fontAdapter(fixture);
+		const results = await worker.doWork();
+		expect(results[0].ctx.root.ownerDocument).toBe(doc);
+		expect(results[0].result.finish).toBe(true);
+		expect(native.decodes()).toBe(1);
+		expect(fixture.window.document.querySelector('.font-cxsecret').textContent).toBe('Parent 一');
+		expect(fixture.calls.find((call) => call.operation === 'begin').data.question).toBe('丁');
+		root.querySelector('h3').insertAdjacentHTML('beforeend', '<img src="./formula.png">');
+		const requested: string[] = [];
+		fixture.context.fetch = async (url: string) => {
+			requested.push(url);
+			return { ok: true, blob: async () => new fixture.window.Blob([png]) };
+		};
+		await fixture.runtime.begin({ title: '丁' }, questionContext(fixture, root));
+		expect(requested).toEqual(['https://mooc1.chaoxing.com/nested/frame/formula.png']);
 	});
 	it('reuses an inner submit confirmation without waiting a second time', async () => {
 		const fixture = page();
@@ -549,7 +743,7 @@ describe('question browser runtime', () => {
 				'task-1': { taskId: 'task-1', status: 'agree', answer: ['second', 'second'], submissionBlocked: false }
 			}
 		);
-		const session = await fixture.runtime.begin({ title: 'two blanks', type: 'completion' });
+		const session = await fixture.runtime.begin({ title: 'two blanks', type: 'completion' }, questionContext(fixture));
 		const infos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('#root');
 		const options = [...root.querySelectorAll('.blank')];
@@ -560,36 +754,25 @@ describe('question browser runtime', () => {
 		expect(options.map((option: any) => option.querySelector('textarea').value)).toEqual(['second', 'second']);
 	});
 	it.each(['completion', 'fill-blank'])(
-		'captures only the stem for visual %s questions with hidden editor fields',
+		'reads %s text and blank count without capturing hidden editor fields',
 		async (type) => {
 			const fixture = page(
-				'<div class="TiMu"><h3 class="font-cxsecret">Synthetic ___ and ___</h3>' +
+				'<div class="TiMu"><h3 class="title">Synthetic ___ and ___</h3>' +
 					'<ul><li><textarea style="display:none"></textarea><iframe></iframe></li>' +
 					'<li><textarea style="display:none"></textarea><iframe></iframe></li></ul></div>'
 			);
 			const root = fixture.window.document.querySelector('.TiMu');
 			const options = [...root.querySelectorAll('textarea')];
-			const bridge = fixture.window.__ocsQuestionBridge;
-			let captured: any;
-			fixture.window.__ocsQuestionBridge = async (operation: string, data: any) => {
-				if (operation !== 'capture') return bridge(operation, data);
-				captured = data;
-				for (const part of data.parts) {
-					const element = root.querySelector(`[data-ocs-ai-capture="${part.id}"]`);
-					if (element.matches('textarea')) throw new Error('element is not visible');
-				}
-				return { images: data.parts.map(() => pngData), imageLabels: data.parts.map((part: any) => part.label) };
-			};
 			await fixture.runtime.begin(
 				{ title: 'Synthetic ___ and ___', type, options: '' },
 				{ root, type, elements: { title: [root.querySelector('h3')], options } }
 			);
 			const input = fixture.calls.find((call) => call.operation === 'begin').data;
 			expect(input.imageErrors).toEqual([]);
-			expect(captured.parts.map((part: any) => part.role)).toEqual(['stem']);
-			expect(input.images).toHaveLength(1);
+			expect(input.question).toBe('Synthetic ___ and ___');
+			expect(input.images).toHaveLength(0);
 			expect(input.options).toEqual(['第 1 空', '第 2 空']);
-			expect(options.every((option: any) => !option.hasAttribute('data-ocs-ai-capture'))).toBe(true);
+			expect(input.rootId).toBe(root.getAttribute('data-ocs-ai-question'));
 		}
 	);
 	it('preserves blank count through the actual 5.x answerer when blank text is empty', async () => {
@@ -616,7 +799,10 @@ describe('question browser runtime', () => {
 				'task-1': { taskId: 'task-1', status: 'agree', answer: ['B', 'C'], submissionBlocked: false }
 			}
 		);
-		const session = await fixture.runtime.begin({ title: 'choose', type: 'multiple', options: 'A\nB\nC' });
+		const session = await fixture.runtime.begin(
+			{ title: 'choose', type: 'multiple', options: 'A\nB\nC' },
+			questionContext(fixture)
+		);
 		const infos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('#root');
 		const options = [...root.querySelectorAll('.answer_p')];
@@ -633,7 +819,10 @@ describe('question browser runtime', () => {
 		const fixture = page(
 			'<div id="root"><label class="answer_p"><input type="radio" name="one">A</label><label class="answer_p"><input type="radio" name="one">B</label></div>'
 		);
-		const session = await fixture.runtime.begin({ title: 'one', type: 'single', options: 'A\nB' });
+		const session = await fixture.runtime.begin(
+			{ title: 'one', type: 'single', options: 'A\nB' },
+			questionContext(fixture)
+		);
 		const infos = await fixture.runtime.finish(session, []);
 		const root = fixture.window.document.querySelector('#root');
 		const options = [...root.querySelectorAll('.answer_p')];
@@ -645,17 +834,24 @@ describe('question browser runtime', () => {
 		await new Promise((resolve) => setTimeout(resolve, 1900));
 		expect(options.map((option: any) => option.querySelector('input').checked)).toEqual([false, true]);
 	});
-	it('rejects a blank mismatch instead of joining or guessing answers', async () => {
-		const fixture = page('<div id="root"><textarea></textarea><textarea></textarea></div>');
-		const session = await fixture.runtime.begin({ title: 'two', type: 'completion' });
-		const infos = await fixture.runtime.finish(session, []);
-		const root = fixture.window.document.querySelector('#root');
-		const result = await fixture.runtime
-			.resolver({ root, searchInfos: infos })
-			.completion(infos, [...root.querySelectorAll('textarea')], async () => {});
-		expect(result.finish).toBe(false);
-		expect(result.error).toContain('数量');
-	});
+	it.each([[['one']], [['one', 'two', 'three']]])(
+		'rejects a blank mismatch for %j without modifying fields',
+		async (answers) => {
+			const fixture = page('<div id="root"><textarea></textarea><textarea></textarea></div>', {
+				'task-1': { taskId: 'task-1', status: 'agree', answer: answers, submissionBlocked: false }
+			});
+			const session = await fixture.runtime.begin({ title: 'two', type: 'completion' }, questionContext(fixture));
+			expect(session.input.options).toEqual(['第 1 空', '第 2 空']);
+			const infos = await fixture.runtime.finish(session, []);
+			const root = fixture.window.document.querySelector('#root');
+			const result = await fixture.runtime
+				.resolver({ root, searchInfos: infos })
+				.completion(infos, [...root.querySelectorAll('textarea')], async () => {});
+			expect(result.finish).toBe(false);
+			expect(result.error).toContain('数量');
+			expect([...root.querySelectorAll('textarea')].map((field: any) => field.value)).toEqual(['', '']);
+		}
+	);
 	it('does not treat stale checked attributes or partially-filled blanks as complete', () => {
 		const fixture = page(
 			'<div id="root"><input type="radio" checked></div><div id="blanks"><textarea>done</textarea><textarea></textarea></div>'
@@ -710,7 +906,7 @@ describe('question browser runtime', () => {
 			setTimeout(() => {
 				parent.window.document.querySelector('#popok').onclick = () => {
 					confirmations++;
-					void child.window.fetch('/work/addStudentWorkNew');
+					child.window.fetch('/work/addStudentWorkNew');
 				};
 				parent.window.document.querySelector('#workpop').style.display = 'block';
 			}, 20);
@@ -730,7 +926,7 @@ describe('question browser runtime', () => {
 		fixture.window.btnBlueSubmit = () => {
 			fixture.window.document.querySelector('#popok').onclick = () => {
 				confirmations++;
-				void fixture.window.fetch('/work/addStudentWorkNew');
+				fixture.window.fetch('/work/addStudentWorkNew');
 			};
 			fixture.window.document.querySelector('#workpop').style.display = 'block';
 		};
@@ -769,7 +965,9 @@ describe('question browser runtime', () => {
 			return { status: 200, clone: () => ({ text: async () => '{"status":true}' }) };
 		};
 		const button = fixture.window.document.querySelector('.bluebtn');
-		button.onclick = () => void fixture.window.fetch('/work/addStudentWorkNew');
+		button.onclick = () => {
+			fixture.window.fetch('/work/addStudentWorkNew');
+		};
 		const result = await fixture.runtime.submit(
 			[],
 			async () => {
@@ -799,7 +997,7 @@ describe('question browser runtime', () => {
 		const result = await fixture.runtime.submit(
 			[],
 			() => {
-				void fixture.window.fetch('/work/addStudentWorkNew');
+				fixture.window.fetch('/work/addStudentWorkNew');
 				return true;
 			},
 			20
@@ -810,7 +1008,10 @@ describe('question browser runtime', () => {
 	it('does not let a previous chapter timeout block a new question set after the old root is removed', async () => {
 		const fixture = page('<div class="questionLi">Previous chapter</div>');
 		const root = fixture.window.document.querySelector('.questionLi');
-		const session = await fixture.runtime.begin({ title: 'Previous chapter', type: 'single', options: ['A'] });
+		const session = await fixture.runtime.begin(
+			{ title: 'Previous chapter', type: 'single', options: ['A'] },
+			questionContext(fixture)
+		);
 		const searchInfos = await fixture.runtime.finish(session, []);
 		fixture.runtime.resolver({ root, searchInfos });
 		expect((await fixture.runtime.submit([], () => true, 20)).ok).toBe(false);
@@ -886,7 +1087,7 @@ describe('browser image collection and decoding', () => {
 			optionsImages: [],
 			enableImageOptimize: false
 		});
-		await fixture.runtime.begin(built.env);
+		await fixture.runtime.begin(built.env, questionContext(fixture));
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(input.images).toEqual([]);
 		expect(input.imageErrors).toEqual([]);
@@ -901,14 +1102,17 @@ describe('browser image collection and decoding', () => {
 			requested.push(url);
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({
-			title: 'Clock diagram question',
-			ocs_required_images: ['https://images.example.test/question-clock.png']
-		});
+		await fixture.runtime.begin(
+			{
+				title: 'Clock diagram question',
+				ocs_required_images: ['https://images.example.test/question-clock.png']
+			},
+			questionContext(fixture)
+		);
 		expect(requested).toEqual(['https://images.example.test/question-clock.png']);
 		expect(fixture.calls.find((call) => call.operation === 'begin').data.images).toEqual([pngData]);
 	});
-	it('still discovers a lazy-loaded stem image when upstream metadata is empty', async () => {
+	it('trusts an explicit empty upstream image list even when stem/option containers have icons', async () => {
 		const fixture = page(
 			'<div class="questionLi"><div class="countdown"><img src="https://images.example.test/clock.png"></div>' +
 				'<div class="mark_name">Lazy stem<img src="" data-src="https://images.example.test/diagram.png"></div></div>'
@@ -918,8 +1122,9 @@ describe('browser image collection and decoding', () => {
 			requested.push(url);
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({ title: 'Lazy stem', ocs_required_images: [] });
-		expect(requested).toEqual(['https://images.example.test/diagram.png']);
+		await fixture.runtime.begin({ title: 'Lazy stem', ocs_required_images: [] }, questionContext(fixture));
+		expect(requested).toEqual([]);
+		expect(fixture.calls.find((call) => call.operation === 'begin').data.images).toEqual([]);
 	});
 	it('limits legacy DOM fallback to available stem and option containers', async () => {
 		const fixture = page(
@@ -932,7 +1137,7 @@ describe('browser image collection and decoding', () => {
 			requested.push(url);
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({ title: 'Legacy question' });
+		await fixture.runtime.begin({ title: 'Legacy question' }, questionContext(fixture));
 		expect(requested).toEqual(['https://images.example.test/formula.png', 'https://images.example.test/option.png']);
 	});
 	it('uses a valid 706-byte PNG with a compressed pixel stream and proper PNG chunks', () => {
@@ -964,12 +1169,15 @@ describe('browser image collection and decoding', () => {
 			requests++;
 			throw new Error('must not fetch the page');
 		};
-		await fixture.runtime.begin({
-			title: 'Synthetic question',
-			images: ['', ' ', '#', '#answer', url, url + '#answer'],
-			ocs_image_sources: ['', ' ', '#', '#answer', url, url + '#answer'],
-			ocs_required_images: ['', ' ', '#', '#answer', url, url + '#answer']
-		});
+		await fixture.runtime.begin(
+			{
+				title: 'Synthetic question',
+				images: ['', ' ', '#', '#answer', url, url + '#answer'],
+				ocs_image_sources: ['', ' ', '#', '#answer', url, url + '#answer'],
+				ocs_required_images: ['', ' ', '#', '#answer', url, url + '#answer']
+			},
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(requests).toBe(0);
 		expect(input.images).toEqual([]);
@@ -983,12 +1191,15 @@ describe('browser image collection and decoding', () => {
 			requests++;
 			throw new Error('must not fetch');
 		};
-		await fixture.runtime.begin({
-			title: 'Synthetic question',
-			images: [pngData, url],
-			ocs_image_sources: ['https://images.example.test/synthetic.png', url],
-			ocs_required_images: ['https://images.example.test/synthetic.png', url, url + '#answer']
-		});
+		await fixture.runtime.begin(
+			{
+				title: 'Synthetic question',
+				images: [pngData, url],
+				ocs_image_sources: ['https://images.example.test/synthetic.png', url],
+				ocs_required_images: ['https://images.example.test/synthetic.png', url, url + '#answer']
+			},
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(requests).toBe(0);
 		expect(input.images).toEqual([pngData]);
@@ -1007,7 +1218,7 @@ describe('browser image collection and decoding', () => {
 			requested.push(url);
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({ title: 'Lazy question' });
+		await fixture.runtime.begin({ title: 'Lazy question' }, questionContext(fixture));
 		expect(requested).toEqual(['https://images.example.test/first.png', 'https://images.example.test/second.png']);
 		expect(fixture.calls.find((call) => call.operation === 'begin').data.imageErrors).toEqual([]);
 	});
@@ -1018,7 +1229,10 @@ describe('browser image collection and decoding', () => {
 			credentials = options.credentials;
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type }) };
 		};
-		await fixture.runtime.begin({ title: 'Synthetic PNG', images: ['https://images.example.test/synthetic.png'] });
+		await fixture.runtime.begin(
+			{ title: 'Synthetic PNG', images: ['https://images.example.test/synthetic.png'] },
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(credentials).toBe('include');
 		expect(input.images).toEqual([pngData]);
@@ -1030,7 +1244,10 @@ describe('browser image collection and decoding', () => {
 			ok: true,
 			blob: async () => new fixture.window.Blob([Buffer.from(base64, 'base64')], { type: 'application/octet-stream' })
 		});
-		await fixture.runtime.begin({ title: 'Raster sample', images: ['https://images.example.test/sample'] });
+		await fixture.runtime.begin(
+			{ title: 'Raster sample', images: ['https://images.example.test/sample'] },
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(input.images).toEqual([`data:${mime};base64,${base64}`]);
 		expect(input.imageErrors).toEqual([]);
@@ -1042,11 +1259,14 @@ describe('browser image collection and decoding', () => {
 			requested.push(url);
 			return { ok: true, blob: async () => new fixture.window.Blob([png], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({
-			title: 'Mapping without preconverted data',
-			ocs_image_sources: ['https://images.example.test/required.png'],
-			images: []
-		});
+		await fixture.runtime.begin(
+			{
+				title: 'Mapping without preconverted data',
+				ocs_image_sources: ['https://images.example.test/required.png'],
+				images: []
+			},
+			questionContext(fixture)
+		);
 		expect(requested).toEqual(['https://images.example.test/required.png']);
 		expect(fixture.calls.find((call) => call.operation === 'begin').data.images).toEqual([pngData]);
 	});
@@ -1057,7 +1277,7 @@ describe('browser image collection and decoding', () => {
 			ok: true,
 			blob: async () => new fixture.window.Blob(['<!doctype html><title>Sign in</title>'], { type: 'text/html' })
 		});
-		await fixture.runtime.begin({ title: 'Missing real image', images: [source] });
+		await fixture.runtime.begin({ title: 'Missing real image', images: [source] }, questionContext(fixture));
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(input.images).toEqual([source]);
 		expect(input.imageErrors).toHaveLength(1);
@@ -1076,7 +1296,10 @@ describe('browser image collection and decoding', () => {
 			fallback = true;
 			options.onload({ status: 200, response: new fixture.window.Blob([png], { type: 'application/octet-stream' }) });
 		};
-		await fixture.runtime.begin({ title: 'GM image', images: ['https://images.example.test/synthetic.png'] });
+		await fixture.runtime.begin(
+			{ title: 'GM image', images: ['https://images.example.test/synthetic.png'] },
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(fallback).toBe(true);
 		expect(input.images).toEqual([pngData]);
@@ -1096,7 +1319,7 @@ describe('browser image collection and decoding', () => {
 			active--;
 			return { ok: true, blob: async () => new fixture.window.Blob([pictures[index]], { type: 'image/png' }) };
 		};
-		await fixture.runtime.begin({ title: 'Many synthetic images', images: sources });
+		await fixture.runtime.begin({ title: 'Many synthetic images', images: sources }, questionContext(fixture));
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(maximum).toBe(4);
 		expect(input.images).toEqual(pictures.map((picture) => 'data:image/png;base64,' + picture.toString('base64')));
@@ -1109,10 +1332,13 @@ describe('browser image collection and decoding', () => {
 			ok: true,
 			blob: async () => new fixture.window.Blob([picture], { type: 'application/octet-stream' })
 		});
-		await fixture.runtime.begin({
-			title: 'Large synthetic PNGs',
-			images: [0, 1, 2].map((index) => `https://images.example.test/large-${index}.png`)
-		});
+		await fixture.runtime.begin(
+			{
+				title: 'Large synthetic PNGs',
+				images: [0, 1, 2].map((index) => `https://images.example.test/large-${index}.png`)
+			},
+			questionContext(fixture)
+		);
 		const input = fixture.calls.find((call) => call.operation === 'begin').data;
 		expect(input.images).toHaveLength(3);
 		expect(input.images.reduce((length: number, value: string) => length + value.length, 0)).toBeGreaterThan(
@@ -1174,6 +1400,7 @@ describe('worker-owned bridge', () => {
 		expect(requests[0].data.pageId).not.toBe('spoofed');
 		expect(requests[0].data.sourceUrl).toBe(url);
 		await expect(callback(source, 'decision', { taskId: 'foreign' })).rejects.toThrow('不属于');
+		await expect(callback(source, 'capture', {})).rejects.toThrow('不支持');
 		await expect(callback(source, 'decisions', { taskIds: ['owned', 'foreign'] })).rejects.toThrow('不属于');
 		await callback(source, 'decisions', { taskIds: ['owned'] });
 		expect(requests.at(-1).data.taskIds).toEqual(['owned']);

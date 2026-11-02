@@ -54,6 +54,7 @@ export function normalizeAnswer(raw: unknown, input: QuestionInput, bank = false
 	if (!parts.length) throw new Error('未返回有效答案');
 	if (input.type === 'judgement') {
 		if (parts.length !== 1) throw new Error('判断题必须只有一个答案');
+		// Legacy: visual mode is no longer created since v3.4.0, preserved for historical task records
 		if (input.contentMode === 'visual' && input.options.length) {
 			return { kind: 'single', index: optionIndex(parts[0], input.options, bank) };
 		}
@@ -143,6 +144,7 @@ export function normalizeQuestion(value: QuestionInput): QuestionInput {
 	const sourceUrl = typeof value.sourceUrl === 'string' ? value.sourceUrl.slice(0, 4000) : '';
 	const formalExam =
 		value.formalExam === true || /\/examObject(?:[/?#]|$)|\/exam(?!-ans(?:[/?#]|$))(?:[-_/.?#]|$)/i.test(sourceUrl);
+	// Legacy: visual mode is no longer created since v3.4.0, preserved for historical task records
 	return {
 		question: value.question.trim(),
 		options: value.options.slice(),

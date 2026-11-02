@@ -47,6 +47,7 @@ export function createQuestionRuntime() {
 	const rootSessions = new WeakMap<HTMLElement, Session>();
 	const retryRoots = new WeakSet<HTMLElement>();
 	const continuations = new WeakMap<WorkerLike, () => Promise<unknown>>();
+	const fontTasks = new WeakMap<Document, Promise<void>>();
 	const startingLocation = location.href;
 	let disposed = false;
 	let failedSubmissionRoots: HTMLElement[] | undefined;
@@ -202,15 +203,16 @@ export function createQuestionRuntime() {
 		const lineInputs = Array.from(root.querySelectorAll<HTMLInputElement>('.line_answer input[name^=answer]'));
 		return lineInputs.length > 0 && lineInputs.every((field) => !!field.value.trim());
 	}
-	function imageSources(env: any): string[] {
+	function imageSources(env: any, context?: Context): string[] {
 		const sources = new Set<string>();
 		const mapped = new Map<string, string>();
-		const documentUrl = new URL(location.href);
+		const doc = context?.root.ownerDocument || document;
+		const documentUrl = new URL(doc.URL);
 		documentUrl.hash = '';
 		const normalize = (value: unknown): string | undefined => {
 			if (typeof value !== 'string' || !value.trim() || value.trim().startsWith('#')) return undefined;
 			try {
-				const url = new URL(value.trim(), location.href);
+				const url = new URL(value.trim(), doc.baseURI);
 				if (!/^(?:https?:|data:|blob:)$/.test(url.protocol)) return undefined;
 				url.hash = '';
 				if (url.protocol === 'http:' || url.protocol === 'https:') {
@@ -252,20 +254,21 @@ export function createQuestionRuntime() {
 					add(candidate);
 			}
 		}
-		const title = clean(env.title);
-		const root = Array.from(
-			document.querySelectorAll<HTMLElement>('.questionLi,.TiMu,.subject,.question,[class*=questionBody]')
-		).find((element) => title && clean(element.textContent).includes(title));
 		// OCS 5 supplies the exact images extracted from the stem and options,
 		// including an empty list for text-only questions. Scanning its whole
 		// container adds unrelated countdown/status icons to every request.
+		if (Array.isArray(env.ocs_required_images)) return [...sources];
+		const title = clean(env.title);
+		const root =
+			context?.root ||
+			Array.from(doc.querySelectorAll<HTMLElement>('.questionLi,.TiMu,.subject,.question,[class*=questionBody]')).find(
+				(element) => title && clean(element.textContent).includes(title)
+			);
 		const content = root?.querySelectorAll<HTMLElement>(
 			'.mark_name,.Zy_TItle,.question-title,.question-stem,.stem,.title,.subject_describe,.answer_p,.option,.textDIV,.eidtDiv,.line_wid_half'
 		);
 		const domImages = content?.length
 			? Array.from(content).flatMap((element) => Array.from(element.querySelectorAll<HTMLImageElement>('img')))
-			: Array.isArray(env.ocs_required_images)
-			? []
 			: Array.from(root?.querySelectorAll<HTMLImageElement>('img') || []);
 		domImages.forEach((image) => {
 			// HTMLImageElement.src resolves an empty attribute to this document. Inspect explicit attributes instead.
@@ -383,88 +386,29 @@ export function createQuestionRuntime() {
 		);
 	}
 	function mark(element: HTMLElement) {
-		let id = element.getAttribute('data-ocs-ai-capture');
+		let id = element.getAttribute('data-ocs-ai-question');
 		if (!id || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) {
 			id = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
-			element.setAttribute('data-ocs-ai-capture', id);
+			element.setAttribute('data-ocs-ai-question', id);
 		}
 		return id;
 	}
-	async function visualQuestion(env: any, context?: Context): Promise<QuestionInput | undefined> {
-		const root =
-			context?.root ||
-			Array.from(document.querySelectorAll<HTMLElement>('.questionLi,.TiMu,.subject,.question')).find(
-				(element) => clean(env.title) && clean(element.textContent).includes(clean(env.title))
-			);
-		if (!root || !hasSecretFont(root)) return undefined;
-		const input: QuestionInput = {
-			question: '自定义字体题目（按原始题图识别）',
-			options: [],
-			type: String(context?.type || env.type || 'unknown'),
-			contentMode: 'visual',
-			rootId: mark(root),
-			sourceUrl: location.href,
-			assessment: assessment(),
-			formalExam: formalExam(),
-			images: [],
-			imageErrors: [],
-			imageLabels: []
-		};
-		try {
-			if (!context?.elements?.title?.length) throw new Error('无法精确定位原始题干，请重新打开题目页面');
-			const isControl = (element: HTMLElement) => {
-				const hint = String(element.className) + ' ' + element.id;
-				return (
-					/timer|countdown|remain.?time|time.?limit/i.test(hint) &&
-					/^[\s\d:：时分秒倒计剩余]*$/.test(clean(element.textContent))
-				);
-			};
-			const titles = [...new Set(context.elements.title)].filter(
-				(element) =>
-					element &&
-					element !== root &&
-					element.isConnected &&
-					root.contains(element) &&
-					visible(element) &&
-					!isControl(element)
-			);
-			const stems = titles.filter((element) => !titles.some((other) => other !== element && other.contains(element)));
-			const options = (context.elements.options || []).filter(Boolean);
-			const completion = ['completion', 'fill-blank'].includes(input.type || '');
-			if (
-				!stems.length ||
-				(!options.length && (completion || ['single', 'multiple', 'judgement'].includes(input.type || '')))
-			) {
-				throw new Error('题干或作答区域缺失，已停止猜测文字');
-			}
-			input.options = options.map((_option, index) =>
-				completion ? `第 ${index + 1} 空` : `选项 ${index < 26 ? String.fromCharCode(65 + index) : index + 1}（见图片）`
-			);
-			const parts = [
-				...stems.map((element, index) => ({
-					id: mark(element),
-					role: 'stem',
-					label: `题干 ${index + 1}`,
-					text: element.textContent || ''
-				})),
-				// Completion options are answer fields, often hidden UEditor
-				// textareas. They supply blank count/order, not question images.
-				...(completion ? [] : options).map((element, index) => ({
-					id: mark(element),
-					role: 'option',
-					text: element.textContent || '',
-					label: `选项 ${index < 26 ? String.fromCharCode(65 + index) : index + 1}`
-				}))
-			];
-			const capture = await send('capture', { rootId: mark(root), parts });
-			if (!Array.isArray(capture?.images) || capture.images.length !== parts.length)
-				throw new Error('原始字形截图不完整');
-			input.images = capture.images;
-			input.imageLabels = capture.imageLabels;
-		} catch (error) {
-			input.imageErrors = ['原始字形截图失败：' + String(error)];
-		}
-		return input;
+	function decodeFonts(doc: Document, decode: () => Promise<HTMLElement[] | undefined>): Promise<void> {
+		const pending = fontTasks.get(doc);
+		if (pending) return pending;
+		if (!doc.querySelector('.font-cxsecret')) return Promise.resolve();
+		const work = Promise.resolve()
+			.then(decode)
+			.then((roots) => {
+				if (!roots) throw new Error('OCS 字体转换未完成，请检查字库加载后在课程页重新开始答题；仍失败时刷新页面重试');
+				for (const root of roots) {
+					root.classList.remove('font-cxsecret');
+					root.querySelectorAll('.font-cxsecret').forEach((element) => element.classList.remove('font-cxsecret'));
+				}
+			})
+			.finally(() => fontTasks.delete(doc));
+		fontTasks.set(doc, work);
+		return work;
 	}
 	async function begin(env: any, context?: Context): Promise<Session> {
 		for (const [id, previous] of sessions) {
@@ -473,16 +417,16 @@ export function createQuestionRuntime() {
 				watched.delete(id);
 			}
 		}
-		const visual = await visualQuestion(env, context);
-		if (visual) {
-			for (const previous of sessions.values()) if (previous.root === context?.root) previous.superseded = true;
-			const created = await send('begin', visual);
-			visual.images = undefined;
-			const session: Session = { ...created, input: visual, root: context?.root };
-			if (session.taskId) sessions.set(session.taskId, session);
-			return session;
+		if (context?.root && hasSecretFont(context.root)) {
+			const doc = context.root.ownerDocument;
+			const pending = fontTasks.get(doc);
+			if (!pending) {
+				throw new Error('OCS 字体转换尚未启动但存在加密文字，请刷新页面后重新搜题');
+			}
+			await pending;
+			if (hasSecretFont(context.root)) throw new Error('OCS 字体转换后仍存在加密文字，请刷新页面后重新搜题');
 		}
-		const sources = imageSources(env);
+		const sources = imageSources(env, context);
 		const images: string[] = new Array(sources.length);
 		const errors: Array<string | undefined> = new Array(sources.length);
 		let next = 0;
@@ -565,7 +509,7 @@ export function createQuestionRuntime() {
 		if (!session.enabled) return bankInfos;
 		session.decision = await send('complete', {
 			taskId: session.taskId,
-			bankInfos: session.input.contentMode === 'visual' ? [] : bankInfos
+			bankInfos
 		});
 		return searchInfo(session);
 	}
@@ -1202,6 +1146,7 @@ export function createQuestionRuntime() {
 		return results;
 	}
 	return {
+		decodeFonts,
 		begin,
 		finish,
 		resolver,

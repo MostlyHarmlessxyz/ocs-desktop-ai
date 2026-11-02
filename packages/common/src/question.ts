@@ -40,7 +40,7 @@ export interface QuestionInput {
 	formalExam?: boolean;
 	images?: string[];
 	imageErrors?: string[];
-	/** Visual input preserves custom-font glyphs instead of sending encrypted text. */
+	/** Retained for reading historical screenshot-based records. New tasks use text. */
 	contentMode?: 'text' | 'visual';
 	imageLabels?: string[];
 }
@@ -172,4 +172,4 @@ export interface QuestionRemoteMethods {
 	questionControl: (action: 'pause' | 'resume' | 'cancel' | 'retry', id?: string) => Promise<void>;
 	questionResolve: (id: string, answers: string[]) => Promise<QuestionDecision>;
 }
-export const QUESTION_BRIDGE_VERSION = 'ai-10';
+export const QUESTION_BRIDGE_VERSION = 'ai-12';

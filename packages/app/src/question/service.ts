@@ -247,6 +247,7 @@ export class QuestionService {
 	}
 
 	private accept(task: QuestionTask, answer: string[], source: QuestionTask['decisionSource'], reason: string) {
+		// Legacy: visual mode is no longer created since v3.4.0, preserved for historical task records
 		if (task.input.contentMode === 'visual') reason = '依据页面原始字形图片作答。' + reason;
 		task.answer = answer;
 		task.reason = reason;
@@ -293,6 +294,7 @@ export class QuestionService {
 	private async decide(task: QuestionTask, runtime: Runtime): Promise<QuestionDecision> {
 		await this.wait(runtime);
 		if (this.runtime.get(task.id) !== runtime) throw abortError();
+		// Legacy: visual mode is no longer created since v3.4.0, preserved for historical task records
 		const banks = bankAnswers(
 			runtime.settings.strategy === 'model-only' || task.input.contentMode === 'visual' ? [] : runtime.banks || [],
 			task.input
@@ -473,7 +475,7 @@ export class QuestionService {
 			return;
 		}
 		if (!task.pageConnected) throw new Error('原页面已断开，请在课程页面重新启动搜题');
-		if (questionInputError(task.input)) throw new Error('题目采集失败，请在课程页面重新搜题以读取最新题图');
+		if (questionInputError(task.input)) throw new Error('题目采集失败，请在课程页面重新搜题以读取最新内容');
 		if (ACTIVE.has(task.phase)) throw new Error('任务正在运行');
 		previous?.controller.abort();
 		const settings = this.configuration.get();

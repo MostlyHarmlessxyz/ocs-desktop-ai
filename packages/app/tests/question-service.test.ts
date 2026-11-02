@@ -148,6 +148,43 @@ describe('搜题任务策略与状态', () => {
 		expect((await service.detail(taskId)).task.callIds).toEqual([]);
 		await expect(service.control('retry', taskId)).rejects.toThrow('重新搜题');
 	});
+	it('旧版 visual 题在页面仍连接时可重试，重试保留图片输入', async () => {
+		const { service, run } = setup('consensus', 'A', '首次调用失败');
+		const visual = {
+			...input,
+			question: '旧版截图题',
+			rootId: 'legacy-visual',
+			contentMode: 'visual' as const,
+			imageLabels: ['题干与选项'],
+			images: ['data:image/png;base64,aGVsbG8=']
+		};
+		const { taskId } = service.begin(visual);
+		await service.complete(taskId);
+		expect((await service.detail(taskId)).task.input).toMatchObject({
+			contentMode: 'visual',
+			imageLabels: ['题干与选项'],
+			images: visual.images
+		});
+		run.mockImplementation(
+			async (id, _input, _config, purpose) =>
+				({
+					id: `${purpose}-retry`,
+					taskId: id,
+					purpose,
+					status: 'success',
+					startedAt: Date.now(),
+					finishedAt: Date.now(),
+					model: 'fake',
+					reasoningEffort: 'medium',
+					args: [],
+					imageCount: 1,
+					answer: ['B']
+				} as QuestionCall)
+		);
+		await service.control('retry', taskId);
+		await vi.waitFor(() => expect(service.decision(taskId).answer).toEqual(['B']));
+		expect(run.mock.calls.at(-1)?.[1]).toMatchObject({ contentMode: 'visual', images: visual.images });
+	});
 	it('同一页面同一题的重复请求复用任务，不同空题图不互相取消', async () => {
 		const { service, run } = setup();
 		const first = service.begin({ ...input, rootId: 'q-one' });
@@ -240,5 +277,31 @@ describe('搜题任务策略与状态', () => {
 		const result = reloaded.list({ text: '测试', pageSize: 1 });
 		expect(result.total).toBe(1);
 		expect(result.items[0].pageConnected).toBe(false);
+	});
+	it('visual 历史图和答案在重启后可读取，断开页面需重新搜题', async () => {
+		const { service } = setup();
+		const visual = {
+			...input,
+			question: '持久化旧截图题',
+			contentMode: 'visual' as const,
+			imageLabels: ['题目原图'],
+			images: ['data:image/png;base64,aGVsbG8=']
+		};
+		const { taskId } = service.begin(visual);
+		await service.complete(taskId);
+		await service.close();
+		const reloaded = new QuestionService(new QuestionConfiguration(), new QuestionRecords(dir));
+		services.push(reloaded);
+		const detail = await reloaded.detail(taskId);
+		expect(detail.task.input).toMatchObject({
+			contentMode: 'visual',
+			imageLabels: visual.imageLabels,
+			images: visual.images
+		});
+		expect(detail.task.answer).toEqual(['A']);
+		await expect(reloaded.control('retry', taskId)).rejects.toThrow(/原页面已断开/);
+		const fresh = reloaded.begin({ ...input, pageId: 'page-1', rootId: 'legacy-visual' });
+		expect(fresh.taskId).not.toBe(taskId);
+		expect((await reloaded.detail(taskId)).task.input.contentMode).toBe('visual');
 	});
 });
